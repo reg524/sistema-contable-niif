@@ -1,3 +1,6 @@
+from conciliacion import render_modulo_conciliacion_bancaria
+from reporte_iva import render_modulo_reporte_iva
+from reporte_renta import render_modulo_reporte_renta
 from datetime import date, datetime
 import glob
 import io
@@ -4426,6 +4429,9 @@ def main():
           "9. Estado de Cambios en el Patrimonio",
           "10. Flujo de Caja Proyectado",
           "11. Análisis Financiero Integral",
+          "12. Conciliación Bancaria",
+          "13. Reporte de IVA (Hacienda CR)",
+          "14. Reporte de Renta (Hacienda CR)",
       ],
   )
 
@@ -6366,7 +6372,32 @@ def main():
         mime="application/pdf",
         use_container_width=True,
     )
-
+  elif menu == "12. Conciliación Bancaria" and empresa_id:
+      render_modulo_conciliacion_bancaria(
+          conn,
+          empresa_id,
+          datos_emp,
+          obtener_movimientos_empresa,
+          obtener_cuentas_analiticas_sin_duplicar,
+          calcular_saldos_a_fecha,
+          ejecutar_backup_automatico,
+      )
+  elif menu == "13. Reporte de IVA (Hacienda CR)" and empresa_id:
+      render_modulo_reporte_iva(
+          conn,
+          empresa_id,
+          datos_emp,
+          obtener_movimientos_empresa,
+          ejecutar_backup_automatico,
+      )
+  elif menu == "14. Reporte de Renta (Hacienda CR)" and empresa_id:
+      render_modulo_reporte_renta(
+          conn,
+          empresa_id,
+          datos_emp,
+          obtener_movimientos_empresa,
+          ejecutar_backup_automatico,
+      )
   conn.close()
 
 

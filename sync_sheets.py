@@ -187,7 +187,8 @@ def _buscar_credenciales(d):
   return None
 
 
-def _conectar_sheets():
+@st.cache_resource(show_spinner=False)
+def _obtener_cliente_gspread():
   info_creds = _buscar_credenciales(st.secrets.to_dict())
   if not info_creds:
     return None
@@ -198,11 +199,17 @@ def _conectar_sheets():
           "https://www.googleapis.com/auth/drive",
       ],
   )
-  client = gspread.authorize(creds)
+  return gspread.authorize(creds)
+
+
+def _conectar_sheets():
+  client = _obtener_cliente_gspread()
+  if client is None:
+    return None
   return client.open("BD_Sistema_Contable")
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _leer_todas_las_hojas_cache():
   sh = _conectar_sheets()
   if sh is None:
@@ -261,14 +268,27 @@ def subir_bd_a_sheets(conn):
     sh = _conectar_sheets()
     if sh is None:
       return
+
+    # Verificar si hubo cambios reales en la base de datos antes de escribir
+    firma_actual = []
+    datos_batch = []
+    rangos_limpiar = []
+
     for tabla in TABLAS_ESQUEMA.keys():
-      try:
-        df = pd.read_sql_query(f"SELECT * FROM {tabla}", conn).fillna("")
-        ws = sh.worksheet(tabla)
-        ws.clear()
-        ws.update([df.columns.tolist()] + df.values.tolist())
-      except Exception:
-        pass
-    _leer_todas_las_hojas_cache.clear()
+      df = pd.read_sql_query(f"SELECT * FROM {tabla}", conn).fillna("")
+      valores = [df.columns.tolist()] + df.values.tolist()
+      firma_actual.append((tabla, len(valores), str(valores[-1]) if valores else ""))
+      rangos_limpiar.append(f"'{tabla}'!A:Z")
+      datos_batch.append({"range": f"'{tabla}'!A1", "values": valores})
+
+    firma_str = str(hash(tuple(firma_actual)))
+    if st.session_state.get("ultima_firma_sheets") == firma_str:
+      return
+
+    sh.values_batch_clear({"ranges": rangos_limpiar})
+    sh.values_batch_update(
+        {"valueInputOption": "USER_ENTERED", "data": datos_batch}
+    )
+    st.session_state["ultima_firma_sheets"] = firma_str
   except Exception:
     pass

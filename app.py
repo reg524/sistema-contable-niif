@@ -4433,11 +4433,11 @@ def main():
             (max_actual, old_id),
         )
       conn.commit()
-   mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
+    mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
     emp_sel = st.sidebar.selectbox("Seleccione Empresa:", list(mapa_emp.keys()))
     empresa_id = int(mapa_emp[emp_sel])
     datos_emp = df_empresas[df_empresas["id"] == empresa_id].iloc[0]
-  menu = st.sidebar.radio(
+    menu = st.sidebar.radio(
       "Módulos del Sistema:",
       [
           "1. Empresas y Configuración",

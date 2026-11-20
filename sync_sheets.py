@@ -136,11 +136,23 @@ TABLAS_ESQUEMA = {
 }
 
 
+def _buscar_credenciales(d):
+  if isinstance(d, dict):
+    if "private_key" in d and "client_email" in d:
+      return d
+    for v in d.values():
+      res = _buscar_credenciales(v)
+      if res:
+        return res
+  return None
+
+
 def _conectar_sheets():
-  if "gcp_service_account" not in st.secrets:
+  info_creds = _buscar_credenciales(st.secrets.to_dict())
+  if not info_creds:
     return None
   creds = Credentials.from_service_account_info(
-      st.secrets["gcp_service_account"],
+      info_creds,
       scopes=[
           "https://www.googleapis.com/auth/spreadsheets",
           "https://www.googleapis.com/auth/drive",

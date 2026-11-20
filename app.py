@@ -1,3 +1,4 @@
+from gestion_empresas import render_gestion_empresas
 from sync_sheets import inicializar_y_descargar_bd, subir_bd_a_sheets
 from conciliacion import render_modulo_conciliacion_bancaria
 from reporte_iva import render_modulo_reporte_iva
@@ -4434,6 +4435,7 @@ def main():
           "12. Conciliación Bancaria",
           "13. Reporte de IVA (Hacienda CR)",
           "14. Reporte de Renta (Hacienda CR)",
+          "15. Administración de Empresas",
       ],
   )
 
@@ -6400,8 +6402,10 @@ def main():
           obtener_movimientos_empresa,
           ejecutar_backup_automatico,
       )
-  subir_bd_a_sheets(conn)
-  conn.close()
+  elif menu == "15. Administración de Empresas":
+   render_gestion_empresas(conn)
+subir_bd_a_sheets(conn)
+conn.close()
 
 
 if __name__ == "__main__":

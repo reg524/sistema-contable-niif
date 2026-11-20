@@ -261,21 +261,14 @@ def subir_bd_a_sheets(conn):
     sh = _conectar_sheets()
     if sh is None:
       return
-    datos_actualizar = []
     for tabla in TABLAS_ESQUEMA.keys():
       try:
         df = pd.read_sql_query(f"SELECT * FROM {tabla}", conn).fillna("")
-        if not df.empty:
-          datos_actualizar.append({
-              "range": f"'{tabla}'!A1",
-              "values": [df.columns.tolist()] + df.values.tolist(),
-          })
+        ws = sh.worksheet(tabla)
+        ws.clear()
+        ws.update([df.columns.tolist()] + df.values.tolist())
       except Exception:
         pass
-    if datos_actualizar:
-      sh.values_batch_update(
-          {"valueInputOption": "RAW", "data": datos_actualizar}
-      )
-      _leer_todas_las_hojas_cache.clear()
+    _leer_todas_las_hojas_cache.clear()
   except Exception:
     pass

@@ -135,6 +135,46 @@ TABLAS_ESQUEMA = {
     """,
 }
 
+COLS_NUMERICAS = {
+    "id",
+    "empresa_id",
+    "cuenta_id",
+    "asiento_id",
+    "num_asiento",
+    "acepta_movimiento",
+    "anio",
+    "mes",
+    "anio_fiscal",
+    "debe",
+    "haber",
+    "saldo_banco",
+    "saldo_libros_ini",
+    "saldo_libros_fin",
+    "saldo_conciliado",
+    "diferencia",
+    "ventas_netas_gravadas",
+    "ventas_exentas",
+    "iva_debito",
+    "compras_netas_gravadas",
+    "compras_exentas",
+    "iva_credito",
+    "saldo_favor_anterior",
+    "retenciones_iva",
+    "impuesto_por_pagar",
+    "saldo_favor_siguiente",
+    "ingresos_brutos",
+    "costos_gastos_contables",
+    "utilidad_contable",
+    "gastos_no_deducibles",
+    "ingresos_no_gravables",
+    "renta_neta_imponible",
+    "impuesto_determinado",
+    "pagos_parciales",
+    "retenciones_2pct",
+    "creditos_fiscales",
+    "saldo_favor",
+}
+
 
 def _buscar_credenciales(d):
   if isinstance(d, dict):
@@ -181,10 +221,15 @@ def inicializar_y_descargar_bd(conn):
         datos = ws.get_all_records()
         if datos:
           df = pd.DataFrame(datos)
+          for col in df.columns:
+            if col in COLS_NUMERICAS:
+              df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            else:
+              df[col] = df[col].astype(str)
           cur.execute(f"DELETE FROM {tabla}")
           df.to_sql(tabla, conn, if_exists="append", index=False)
-      except Exception:
-        pass
+      except Exception as e:
+        st.warning(f"Aviso descargando '{tabla}': {e}")
     conn.commit()
     st.session_state["sheets_descargado"] = True
   except Exception as e:
@@ -199,9 +244,10 @@ def subir_bd_a_sheets(conn):
     for tabla in TABLAS_ESQUEMA.keys():
       try:
         df = pd.read_sql_query(f"SELECT * FROM {tabla}", conn).fillna("")
-        ws = sh.worksheet(tabla)
-        ws.clear()
-        ws.update([df.columns.tolist()] + df.values.tolist())
+        if not df.empty:
+          ws = sh.worksheet(tabla)
+          ws.clear()
+          ws.update([df.columns.tolist()] + df.values.tolist())
       except Exception:
         pass
   except Exception:

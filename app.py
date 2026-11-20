@@ -1,6 +1,6 @@
 from gestion_empresas import render_gestion_empresas
 from gestion_backups import render_gestion_backups
-from sync_sheets import inicializar_y_descargar_bd, subir_bd_a_sheets
+from sync_sheets import forzar_refresco_desde_sheets, inicializar_y_descargar_bd, subir_bd_a_sheets
 from conciliacion import render_modulo_conciliacion_bancaria
 from reporte_iva import render_modulo_reporte_iva
 from reporte_renta import render_modulo_reporte_renta
@@ -4440,7 +4440,13 @@ def main():
           "16. Respaldo y Restauración",
       ],
   )
-
+  st.sidebar.markdown("---")
+  if st.sidebar.button(
+      "🔄 Refrescar Datos de la Nube", use_container_width=True
+    ):
+      forzar_refresco_desde_sheets(conn)
+      st.sidebar.success("¡Datos sincronizados!")
+      st.rerun()
   st.sidebar.divider()
   st.sidebar.subheader("🛡️ Seguridad y Respaldo")
   if st.sidebar.button("💾 Crear Backup Ahora", use_container_width=True):

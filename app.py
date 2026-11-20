@@ -1,4 +1,4 @@
-from sync_sheets import inicializar_y_descargar_bd, subir_bd_a_sheets)
+from sync_sheets import inicializar_y_descargar_bd, subir_bd_a_sheets
 from conciliacion import render_modulo_conciliacion_bancaria
 from reporte_iva import render_modulo_reporte_iva
 from reporte_renta import render_modulo_reporte_renta

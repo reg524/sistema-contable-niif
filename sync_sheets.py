@@ -202,6 +202,28 @@ def _conectar_sheets():
   return client.open("BD_Sistema_Contable")
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _leer_todas_las_hojas_cache():
+  sh = _conectar_sheets()
+  if sh is None:
+    return None
+  tablas = list(TABLAS_ESQUEMA.keys())
+  rangos = [f"'{t}'!A:Z" for t in tablas]
+  resp = sh.values_batch_get(rangos)
+  resultado = {}
+  for tabla, vr in zip(tablas, resp.get("valueRanges", [])):
+    filas = vr.get("values", [])
+    if len(filas) > 1:
+      headers = filas[0]
+      n_cols = len(headers)
+      filas_norm = [
+          (f + [""] * (n_cols - len(f)))[:n_cols] for f in filas[1:] if any(f)
+      ]
+      if filas_norm:
+        resultado[tabla] = pd.DataFrame(filas_norm, columns=headers)
+  return resultado
+
+
 def inicializar_y_descargar_bd(conn):
   cur = conn.cursor()
   for ddl in TABLAS_ESQUEMA.values():
@@ -212,22 +234,21 @@ def inicializar_y_descargar_bd(conn):
     return
 
   try:
-    sh = _conectar_sheets()
-    if sh is None:
+    datos_hojas = _leer_todas_las_hojas_cache()
+    if datos_hojas is None:
       return
-    for tabla in TABLAS_ESQUEMA.keys():
+    for tabla, df in datos_hojas.items():
       try:
-        ws = sh.worksheet(tabla)
-        datos = ws.get_all_records()
-        if datos:
-          df = pd.DataFrame(datos)
-          for col in df.columns:
-            if col in COLS_NUMERICAS:
-              df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-            else:
-              df[col] = df[col].astype(str)
-          cur.execute(f"DELETE FROM {tabla}")
-          df.to_sql(tabla, conn, if_exists="append", index=False)
+        df_copia = df.copy()
+        for col in df_copia.columns:
+          if col in COLS_NUMERICAS:
+            df_copia[col] = pd.to_numeric(
+                df_copia[col], errors="coerce"
+            ).fillna(0)
+          else:
+            df_copia[col] = df_copia[col].astype(str)
+        cur.execute(f"DELETE FROM {tabla}")
+        df_copia.to_sql(tabla, conn, if_exists="append", index=False)
       except Exception as e:
         st.warning(f"Aviso descargando '{tabla}': {e}")
     conn.commit()
@@ -241,14 +262,21 @@ def subir_bd_a_sheets(conn):
     sh = _conectar_sheets()
     if sh is None:
       return
+    datos_actualizar = []
     for tabla in TABLAS_ESQUEMA.keys():
       try:
         df = pd.read_sql_query(f"SELECT * FROM {tabla}", conn).fillna("")
         if not df.empty:
-          ws = sh.worksheet(tabla)
-          ws.clear()
-          ws.update([df.columns.tolist()] + df.values.tolist())
+          datos_actualizar.append({
+              "range": f"'{tabla}'!A1",
+              "values": [df.columns.tolist()] + df.values.tolist(),
+          })
       except Exception:
         pass
+    if datos_actualizar:
+      sh.values_batch_update(
+          {"valueInputOption": "RAW", "data": datos_actualizar}
+      )
+      _leer_todas_las_hojas_cache.clear()
   except Exception:
     pass

@@ -13,8 +13,8 @@ from sync_sheets import TABLAS_ESQUEMA, subir_bd_a_sheets
 def render_gestion_backups(conn, db_path="sistema_contable.db"):
   st.subheader("💾 Respaldo y Restauración de Base de Datos")
   st.caption(
-      "Descarga una copia de seguridad íntegra o restaura un respaldo"
-      " anterior en el sistema."
+      "Descarga una copia de seguridad íntegra (incluyendo empresas activas y"
+      " en papelera) o restaura un respaldo anterior."
   )
 
   tab_descargar, tab_restaurar = st.tabs(
@@ -24,15 +24,15 @@ def render_gestion_backups(conn, db_path="sistema_contable.db"):
   # --- PESTAÑA 1: DESCARGAR BACKUP ---
   with tab_descargar:
     st.info(
-        "El respaldo incluye todas tus empresas, catálogos de cuentas, saldos"
-        " iniciales, asientos contables, conciliaciones y declaraciones."
+        "El respaldo incluye todas tus empresas (activas y eliminadas en"
+        " papelera), catálogos de cuentas, saldos iniciales, asientos,"
+        " conciliaciones y declaraciones."
     )
     conn.commit()
     fecha_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     col1, col2 = st.columns(2)
 
-    # Opción A: Archivo SQLite directo (.db)
     if os.path.exists(db_path):
       with open(db_path, "rb") as f:
         db_bytes = f.read()
@@ -45,7 +45,6 @@ def render_gestion_backups(conn, db_path="sistema_contable.db"):
           use_container_width=True,
       )
 
-      # Opción B: Archivo comprimido (.zip) con .db + respaldo en Excel/CSV de respaldo
       zip_buffer = io.BytesIO()
       with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(f"sistema_contable_{fecha_str}.db", db_bytes)
@@ -117,33 +116,52 @@ def render_gestion_backups(conn, db_path="sistema_contable.db"):
               with open(ruta_temp_db, "wb") as f_out:
                 f_out.write(archivo_subido.getvalue())
 
-            # Validar que sea una base de datos SQLite contable válida
             test_conn = sqlite3.connect(ruta_temp_db)
             tablas_en_backup = pd.read_sql_query(
                 "SELECT name FROM sqlite_master WHERE type='table'", test_conn
             )["name"].tolist()
-            test_conn.close()
 
             if "empresas" not in tablas_en_backup:
+              test_conn.close()
               st.error(
                   "El archivo subido no corresponde a una base de datos válida"
                   " del Sistema Contable."
               )
               return
 
-            # Cerrar conexión activa, reemplazar archivo y sincronizar con Google Sheets
+            # Asegurar que todas las empresas del backup tengan activa=1 si no existía la columna
+            cols_emp = [
+                r[1]
+                for r in test_conn.execute(
+                    "PRAGMA table_info(empresas)"
+                ).fetchall()
+            ]
+            if "activa" not in cols_emp:
+              test_conn.execute(
+                  "ALTER TABLE empresas ADD COLUMN activa INTEGER DEFAULT 1"
+              )
+            test_conn.execute(
+                "UPDATE empresas SET activa = 1 WHERE activa IS NULL"
+            )
+            test_conn.commit()
+            test_conn.close()
+
+            # Cerrar conexión activa, reemplazar BD y limpiar cachés
             conn.commit()
             conn.close()
             shutil.copy2(ruta_temp_db, db_path)
+
+            st.cache_data.clear()
+            st.session_state.pop("ultima_firma_sheets", None)
+            st.session_state["sheets_descargado"] = True
 
             nueva_conn = sqlite3.connect(db_path, check_same_thread=False)
             subir_bd_a_sheets(nueva_conn)
             nueva_conn.close()
 
-            st.session_state["sheets_descargado"] = True
             st.success(
                 "✅ ¡Respaldo restaurado exitosamente! Los datos anteriores"
-                " fueron reemplazados y sincronizados con la nube."
+                " fueron reemplazados y sincronizados con Google Sheets."
             )
             st.rerun()
 

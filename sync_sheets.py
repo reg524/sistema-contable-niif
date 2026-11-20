@@ -12,7 +12,8 @@ TABLAS_ESQUEMA = {
             razon_social TEXT,
             nombre_comercial TEXT,
             representante_legal TEXT,
-            actividad_economica TEXT
+            actividad_economica TEXT,
+            activa INTEGER DEFAULT 1
         )
     """,
     "catalogo_cuentas": """
@@ -142,6 +143,7 @@ COLS_NUMERICAS = {
     "asiento_id",
     "num_asiento",
     "acepta_movimiento",
+    "activa",
     "anio",
     "mes",
     "anio_fiscal",
@@ -269,7 +271,6 @@ def subir_bd_a_sheets(conn):
     if sh is None:
       return
 
-    # Verificar si hubo cambios reales en la base de datos antes de escribir
     firma_actual = []
     datos_batch = []
     rangos_limpiar = []
@@ -277,7 +278,9 @@ def subir_bd_a_sheets(conn):
     for tabla in TABLAS_ESQUEMA.keys():
       df = pd.read_sql_query(f"SELECT * FROM {tabla}", conn).fillna("")
       valores = [df.columns.tolist()] + df.values.tolist()
-      firma_actual.append((tabla, len(valores), str(valores[-1]) if valores else ""))
+      firma_actual.append(
+          (tabla, len(valores), str(valores[-1]) if valores else "")
+      )
       rangos_limpiar.append(f"'{tabla}'!A:Z")
       datos_batch.append({"range": f"'{tabla}'!A1", "values": valores})
 
@@ -292,3 +295,10 @@ def subir_bd_a_sheets(conn):
     st.session_state["ultima_firma_sheets"] = firma_str
   except Exception:
     pass
+
+
+def forzar_refresco_desde_sheets(conn):
+  _leer_todas_las_hojas_cache.clear()
+  st.session_state["sheets_descargado"] = False
+  st.session_state.pop("ultima_firma_sheets", None)
+  inicializar_y_descargar_bd(conn)

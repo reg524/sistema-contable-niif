@@ -8,6 +8,7 @@ TABLAS_ESQUEMA = {
     "empresas": """
         CREATE TABLE IF NOT EXISTS empresas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo_contribuyente TEXT DEFAULT 'Persona Jurídica',
             cedula TEXT,
             razon_social TEXT,
             nombre_comercial TEXT,

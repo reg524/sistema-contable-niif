@@ -6403,9 +6403,9 @@ def main():
           ejecutar_backup_automatico,
       )
   elif menu == "15. Administración de Empresas":
-   render_gestion_empresas(conn)
-subir_bd_a_sheets(conn)
-conn.close()
+    render_gestion_empresas(conn)
+  subir_bd_a_sheets(conn)
+  conn.close()
 
 
 if __name__ == "__main__":

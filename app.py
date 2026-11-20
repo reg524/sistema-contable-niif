@@ -4414,11 +4414,29 @@ def main():
     df_empresas["etiqueta"] = df_empresas.apply(
         lambda r: f"{r['razon_social']} ({r['cedula']})", axis=1
     )
-    mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
+    if "activa" in df_empresas.columns:
+      df_empresas = df_empresas[
+          pd.to_numeric(df_empresas["activa"], errors="coerce").fillna(1) == 1
+      ].copy()
+    df_empresas["id"] = (
+        pd.to_numeric(df_empresas["id"], errors="coerce").fillna(0).astype(int)
+    )
+    if (df_empresas["id"] <= 0).any():
+      max_actual = int(df_empresas["id"].max())
+      for idx in df_empresas[df_empresas["id"] <= 0].index:
+        max_actual += 1
+        old_id = int(df_empresas.at[idx, "id"])
+        df_empresas.at[idx, "id"] = max_actual
+        conn.execute(
+            "UPDATE empresas SET id = ? WHERE rowid = (SELECT rowid FROM"
+            " empresas WHERE id = ? LIMIT 1)",
+            (max_actual, old_id),
+        )
+      conn.commit()
+   mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
     emp_sel = st.sidebar.selectbox("Seleccione Empresa:", list(mapa_emp.keys()))
     empresa_id = int(mapa_emp[emp_sel])
     datos_emp = df_empresas[df_empresas["id"] == empresa_id].iloc[0]
-
   menu = st.sidebar.radio(
       "Módulos del Sistema:",
       [

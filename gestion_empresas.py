@@ -5,6 +5,70 @@ import pandas as pd
 import streamlit as st
 from sync_sheets import subir_bd_a_sheets
 
+CATALOGO_BASICO_NIIF = [
+    # ACTIVO
+    ("1", "ACTIVO", "ACTIVO", 0),
+    ("1.1", "ACTIVO CORRIENTE", "ACTIVO", 0),
+    ("1.1.01", "EFECTIVO Y EQUIVALENTES DE EFECTIVO", "ACTIVO", 0),
+    ("1.1.01.01", "Caja General", "ACTIVO", 1),
+    ("1.1.01.02", "Caja Chica", "ACTIVO", 1),
+    ("1.1.01.03", "Bancos Cuenta Corriente Moneda Nacional", "ACTIVO", 1),
+    ("1.1.01.04", "Bancos Cuenta Corriente Moneda Extranjera", "ACTIVO", 1),
+    ("1.1.02", "CUENTAS Y DOCUMENTOS POR COBRAR", "ACTIVO", 0),
+    ("1.1.02.01", "Clientes Nacionales", "ACTIVO", 1),
+    ("1.1.02.02", "Cuentas por Cobrar Empleados y Funcionarios", "ACTIVO", 1),
+    ("1.1.03", "IMPUESTOS POR ACREDITAR Y ANTICIPOS", "ACTIVO", 0),
+    ("1.1.03.01", "IVA Soportado / Acreditable (Compras)", "ACTIVO", 1),
+    ("1.1.03.02", "Retenciones de Renta 2% por Acreditar", "ACTIVO", 1),
+    ("1.1.03.03", "Pagos Parciales de Renta", "ACTIVO", 1),
+    ("1.1.04", "INVENTARIOS", "ACTIVO", 0),
+    ("1.1.04.01", "Inventario de Mercaderías", "ACTIVO", 1),
+    ("1.2", "ACTIVO NO CORRIENTE", "ACTIVO", 0),
+    ("1.2.01", "PROPIEDAD, PLANTA Y EQUIPO", "ACTIVO", 0),
+    ("1.2.01.01", "Mobiliario y Equipo de Oficina", "ACTIVO", 1),
+    ("1.2.01.02", "Equipo de Cómputo", "ACTIVO", 1),
+    ("1.2.01.03", "Depreciación Acumulada Propiedad, Planta y Equipo", "ACTIVO", 1),
+    # PASIVO
+    ("2", "PASIVO", "PASIVO", 0),
+    ("2.1", "PASIVO CORRIENTE", "PASIVO", 0),
+    ("2.1.01", "CUENTAS Y PROVEEDORES POR PAGAR", "PASIVO", 0),
+    ("2.1.01.01", "Proveedores Nacionales", "PASIVO", 1),
+    ("2.1.01.02", "Cuentas por Pagar Varias", "PASIVO", 1),
+    ("2.1.02", "IMPUESTOS Y CARGAS SOCIALES POR PAGAR", "PASIVO", 0),
+    ("2.1.02.01", "IVA Devengado / Por Pagar (Ventas)", "PASIVO", 1),
+    ("2.1.02.02", "Impuesto sobre la Renta por Pagar", "PASIVO", 1),
+    ("2.1.02.03", "Cargas Sociales CCSS por Pagar", "PASIVO", 1),
+    # PATRIMONIO
+    ("3", "PATRIMONIO", "PATRIMONIO", 0),
+    ("3.1", "CAPITAL Y RESULTADOS", "PATRIMONIO", 0),
+    ("3.1.01", "Capital Social / Aportes del Propietario", "PATRIMONIO", 1),
+    ("3.1.02", "Utilidades Acumuladas de Períodos Anteriores", "PATRIMONIO", 1),
+    ("3.1.03", "Pérdidas Acumuladas de Períodos Anteriores", "PATRIMONIO", 1),
+    # INGRESOS
+    ("4", "INGRESOS", "INGRESO", 0),
+    ("4.1", "INGRESOS OPERATIVOS", "INGRESO", 0),
+    ("4.1.01", "Ingresos por Servicios Profesionales / Comerciales", "INGRESO", 1),
+    ("4.1.02", "Ventas de Mercadería Gravadas", "INGRESO", 1),
+    ("4.1.03", "Ventas de Mercadería Exentas", "INGRESO", 1),
+    ("4.2", "OTROS INGRESOS", "INGRESO", 0),
+    ("4.2.01", "Ingresos Financieros e Intereses Ganados", "INGRESO", 1),
+    # COSTOS
+    ("5", "COSTOS DE VENTAS Y SERVICIOS", "COSTO", 0),
+    ("5.1", "COSTO DE OPERACIÓN", "COSTO", 0),
+    ("5.1.01", "Costo de Mercadería Vendida", "COSTO", 1),
+    ("5.1.02", "Costo Directo de Servicios Prestados", "COSTO", 1),
+    # GASTOS
+    ("6", "GASTOS OPERATIVOS", "GASTO", 0),
+    ("6.1", "GASTOS ADMINISTRATIVOS Y DE VENTAS", "GASTO", 0),
+    ("6.1.01", "Sueldos, Salarios y Cargas Sociales", "GASTO", 1),
+    ("6.1.02", "Alquileres de Local y Oficina", "GASTO", 1),
+    ("6.1.03", "Servicios Públicos (Electricidad, Agua, Internet, Teléfono)", "GASTO", 1),
+    ("6.1.04", "Honorarios Profesionales", "GASTO", 1),
+    ("6.1.05", "Papelería, Útiles y Suministros de Oficina", "GASTO", 1),
+    ("6.1.06", "Gastos Bancarios y Comisiones", "GASTO", 1),
+    ("6.1.07", "Gasto por Depreciación", "GASTO", 1),
+]
+
 
 def _asegurar_columnas_empresas(conn):
   cur = conn.cursor()
@@ -27,6 +91,14 @@ def _asegurar_columnas_empresas(conn):
 
 
 def _clonar_catalogo_inicial(cur, nuevo_empresa_id):
+  # Evitar duplicar si ya tiene cuentas
+  ya_tiene = cur.execute(
+      "SELECT COUNT(*) FROM catalogo_cuentas WHERE empresa_id=?",
+      (nuevo_empresa_id,),
+  ).fetchone()[0]
+  if ya_tiene > 0:
+    return ya_tiene
+
   # 1. Intentar desde plantilla_catalogo_cuentas
   plantilla = cur.execute(
       "SELECT codigo, nombre, tipo, acepta_movimiento FROM"
@@ -45,8 +117,9 @@ def _clonar_catalogo_inicial(cur, nuevo_empresa_id):
           (primera_emp[0],),
       ).fetchall()
 
+  # 3. Si no hay ninguna plantilla ni empresa previa, usar el catálogo NIIF básico integrado
   if not plantilla:
-    return 0
+    plantilla = CATALOGO_BASICO_NIIF
 
   max_cta_id = cur.execute(
       "SELECT COALESCE(MAX(id), 0) FROM catalogo_cuentas"
@@ -162,9 +235,9 @@ def render_gestion_empresas(conn):
       actividad = (col2 if es_fisica else st).text_input(
           "Actividad Económica / Profesional"
       ).strip()
-      cargar_catalogo = st.checkbox(
-          "📚 Cargar automáticamente el Catálogo de Cuentas NIIF base",
-          value=True,
+      st.caption(
+          "📚 Se creará automáticamente un catálogo básico de cuentas NIIF para"
+          " este contribuyente."
       )
 
       submitted = st.form_submit_button("💾 Guardar Registro", type="primary")
@@ -214,14 +287,12 @@ def render_gestion_empresas(conn):
                     actividad,
                 ),
             )
-            cuentas_creadas = 0
-            if cargar_catalogo:
-              cuentas_creadas = _clonar_catalogo_inicial(cur, nuevo_id)
+            cuentas_creadas = _clonar_catalogo_inicial(cur, nuevo_id)
             conn.commit()
             subir_bd_a_sheets(conn)
             st.success(
                 f"✅ {tipo_nuevo} '{razon_social}' registrada con"
-                f" {cuentas_creadas} cuentas contables."
+                f" {cuentas_creadas} cuentas contables básicas."
             )
             st.rerun()
 
@@ -298,7 +369,6 @@ def render_gestion_empresas(conn):
           st.success("✅ Datos actualizados correctamente.")
           st.rerun()
 
-      # Herramienta extra: si una empresa existente quedó con 0 cuentas, permitir cargarle el catálogo aquí mismo
       cur = conn.cursor()
       cant_ctas = cur.execute(
           "SELECT COUNT(*) FROM catalogo_cuentas WHERE empresa_id=?",
@@ -308,11 +378,11 @@ def render_gestion_empresas(conn):
         st.warning(
             "⚠️ Este contribuyente aún no tiene catálogo de cuentas cargado."
         )
-        if st.button("📚 Cargar Catálogo de Cuentas NIIF Base Ahora"):
+        if st.button("📚 Construir Catálogo Básico de Cuentas Ahora"):
           n_ins = _clonar_catalogo_inicial(cur, emp_id_ed)
           conn.commit()
           subir_bd_a_sheets(conn)
-          st.success(f"✅ Se cargaron {n_ins} cuentas contables.")
+          st.success(f"✅ Se construyeron {n_ins} cuentas contables básicas.")
           st.rerun()
 
   # --- PESTAÑA 4: ELIMINAR DUPLICADO O ENVIAR A PAPELERA ---

@@ -214,7 +214,7 @@ def _leer_todas_las_hojas_cache():
   for tabla, vr in zip(tablas, resp.get("valueRanges", [])):
     filas = vr.get("values", [])
     if len(filas) > 1:
-      headers = filas[0]
+      headers = [str(h).strip() for h in filas[0] if str(h).strip()]
       n_cols = len(headers)
       filas_norm = [
           (f + [""] * (n_cols - len(f)))[:n_cols] for f in filas[1:] if any(f)
@@ -247,8 +247,7 @@ def inicializar_y_descargar_bd(conn):
             ).fillna(0)
           else:
             df_copia[col] = df_copia[col].astype(str)
-        cur.execute(f"DELETE FROM {tabla}")
-        df_copia.to_sql(tabla, conn, if_exists="append", index=False)
+        df_copia.to_sql(tabla, conn, if_exists="replace", index=False)
       except Exception as e:
         st.warning(f"Aviso descargando '{tabla}': {e}")
     conn.commit()

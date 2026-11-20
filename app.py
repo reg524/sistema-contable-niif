@@ -1,3 +1,4 @@
+from sync_sheets import inicializar_y_descargar_bd, subir_bd_a_sheets)
 from conciliacion import render_modulo_conciliacion_bancaria
 from reporte_iva import render_modulo_reporte_iva
 from reporte_renta import render_modulo_reporte_renta
@@ -4400,6 +4401,7 @@ def main():
     st.session_state.backup_inicial_hecho = True
 
   conn = get_conn()
+  inicializar_y_descargar_bd(conn)
   df_empresas = pd.read_sql_query("SELECT * FROM empresas", conn)
 
   if df_empresas.empty:
@@ -6398,6 +6400,7 @@ def main():
           obtener_movimientos_empresa,
           ejecutar_backup_automatico,
       )
+  subir_bd_a_sheets(conn)
   conn.close()
 
 

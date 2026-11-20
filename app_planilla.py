@@ -1,3 +1,4 @@
+import calendar
 import datetime
 import pandas as pd
 import streamlit as st
@@ -51,8 +52,43 @@ def limpiar_columnas_agrupacion(df, mapeo_defecto):
     return df_out
 
 
+def selector_fecha_dma(titulo, fecha_defecto, key_prefix):
+    """Dibuja 3 selectores explícitos de Día, Mes y Año y retorna un objeto datetime.date válido"""
+    st.markdown(f"**{titulo}**")
+    c_d, c_m, c_a = st.columns([1, 1.5, 1.2])
+    with c_a:
+        anio_sel = st.number_input(
+            "Año:",
+            min_value=2015,
+            max_value=2035,
+            value=int(fecha_defecto.year),
+            step=1,
+            key=f"{key_prefix}_anio"
+        )
+    with c_m:
+        mes_nombre_def = INV_MESES_MAP[fecha_defecto.month]
+        mes_sel = st.selectbox(
+            "Mes:",
+            MESES,
+            index=MESES.index(mes_nombre_def),
+            key=f"{key_prefix}_mes"
+        )
+    mes_num = MESES_MAP[mes_sel]
+    max_dias = calendar.monthrange(int(anio_sel), mes_num)[1]
+    dia_val_def = min(int(fecha_defecto.day), max_dias)
+    with c_d:
+        dia_sel = st.selectbox(
+            "Día:",
+            list(range(1, max_dias + 1)),
+            index=dia_val_def - 1,
+            key=f"{key_prefix}_dia"
+        )
+    return datetime.date(int(anio_sel), mes_num, int(dia_sel))
+
+
 # --- BARRA LATERAL ---
-st.sidebar.title("Módulos del Sistema (Sincronizado)")
+st.sidebar.title("Módulos del Sistema")
+st.sidebar.caption("✅ Versión Actualizada (Rangos Día / Mes / Año)")
 
 if st.sidebar.button("🔄 Actualizar Datos de la Nube", use_container_width=True):
     st.cache_data.clear()
@@ -187,20 +223,21 @@ elif menu == "2. Salarios a Ingresar (Planilla)":
             with col_s3:
                 st.text_input("Puesto que Desempeña:", value=str(datos_colab.get("Puesto", "")), disabled=True)
 
-            col_p1, col_p2, col_p3 = st.columns(3)
-            with col_p1:
-                fecha_planilla = st.date_input(
-                    "Fecha de Planilla / Pago (Día / Mes / Año):",
-                    value=datetime.date.today(),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="fecha_ingreso_planilla"
+            st.markdown("---")
+            col_fecha_box, col_mon_box = st.columns([1.4, 1])
+            with col_fecha_box:
+                fecha_planilla = selector_fecha_dma(
+                    "📅 Fecha Exacta de Planilla / Pago (Día / Mes / Año):",
+                    datetime.date.today(),
+                    "mod2_fecha"
                 )
-            with col_p2:
-                moneda = st.selectbox("Moneda:", ["₡ (Colones)", "$ (Dólares)"])
-            with col_p3:
-                modo = st.selectbox("Periodicidad:", ["Mensual", "Quincenal", "Semanal"])
+            with col_mon_box:
+                st.markdown("**💱 Moneda y Periodicidad**")
+                c_m1, c_m2 = st.columns(2)
+                with c_m1:
+                    moneda = st.selectbox("Moneda:", ["₡ (Colones)", "$ (Dólares)"])
+                with c_m2:
+                    modo = st.selectbox("Periodicidad:", ["Mensual", "Quincenal", "Semanal"])
 
             anio = int(fecha_planilla.year)
             mes = INV_MESES_MAP[fecha_planilla.month]
@@ -364,26 +401,12 @@ elif menu == "3. Costo CCSS Patronal por Empresa":
             empresa_sel = st.selectbox("Seleccione la Empresa:", empresas_disponibles, key="ccss_emp_sel")
             df_emp_base = df_hist[df_hist["Empresa"].str.lower() == empresa_sel.lower()].copy()
 
-            st.markdown("#### 📅 Rango de Fechas Exactas a Calcular (Día / Mes / Año)")
+            st.markdown("---")
             col_r1, col_r2 = st.columns(2)
             with col_r1:
-                fecha_inicio = st.date_input(
-                    "Desde Fecha (Día / Mes / Año):",
-                    value=datetime.date(2024, 1, 1),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="ccss_fecha_ini"
-                )
+                fecha_inicio = selector_fecha_dma("📅 Desde Fecha (Día / Mes / Año):", datetime.date(2024, 1, 1), "ccss_ini")
             with col_r2:
-                fecha_fin = st.date_input(
-                    "Hasta Fecha (Día / Mes / Año):",
-                    value=datetime.date(2026, 12, 31),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="ccss_fecha_fin"
-                )
+                fecha_fin = selector_fecha_dma("📅 Hasta Fecha (Día / Mes / Año):", datetime.date(2026, 12, 31), "ccss_fin")
 
             if fecha_inicio > fecha_fin:
                 st.error("⚠️ La fecha inicial ('Desde') no puede ser posterior a la fecha final ('Hasta').")
@@ -578,26 +601,12 @@ elif menu == "5. Reportes y Exportación":
 
             df_emp_base = df_hist[df_hist["Empresa"].str.lower() == empresa_sel.lower()].copy()
 
-            st.markdown("#### 📅 Rango de Fechas Exactas a Consultar (Día / Mes / Año)")
+            st.markdown("---")
             col_r1, col_r2 = st.columns(2)
             with col_r1:
-                fecha_inicio = st.date_input(
-                    "Desde Fecha (Día / Mes / Año):",
-                    value=datetime.date(2024, 1, 1),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="rep_fecha_ini"
-                )
+                fecha_inicio = selector_fecha_dma("📅 Desde Fecha (Día / Mes / Año):", datetime.date(2024, 1, 1), "rep_ini")
             with col_r2:
-                fecha_fin = st.date_input(
-                    "Hasta Fecha (Día / Mes / Año):",
-                    value=datetime.date(2026, 12, 31),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="rep_fecha_fin"
-                )
+                fecha_fin = selector_fecha_dma("📅 Hasta Fecha (Día / Mes / Año):", datetime.date(2026, 12, 31), "rep_fin")
 
             if fecha_inicio > fecha_fin:
                 st.error("⚠️ La fecha inicial ('Desde') no puede ser posterior a la fecha final ('Hasta').")
@@ -820,26 +829,12 @@ elif menu == "7. Consulta Salarial por Persona y Fechas":
                     key="det_persona_sel"
                 )
 
-            st.markdown("#### 📅 Rango de Fechas Exactas a Consultar (Día / Mes / Año)")
+            st.markdown("---")
             col_r1, col_r2 = st.columns(2)
             with col_r1:
-                fecha_inicio = st.date_input(
-                    "Desde Fecha (Día / Mes / Año):",
-                    value=datetime.date(2024, 1, 1),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="det_fecha_ini"
-                )
+                fecha_inicio = selector_fecha_dma("📅 Desde Fecha (Día / Mes / Año):", datetime.date(2024, 1, 1), "det_ini")
             with col_r2:
-                fecha_fin = st.date_input(
-                    "Hasta Fecha (Día / Mes / Año):",
-                    value=datetime.date(2026, 12, 31),
-                    min_value=datetime.date(2015, 1, 1),
-                    max_value=datetime.date(2035, 12, 31),
-                    format="DD/MM/YYYY",
-                    key="det_fecha_fin"
-                )
+                fecha_fin = selector_fecha_dma("📅 Hasta Fecha (Día / Mes / Año):", datetime.date(2026, 12, 31), "det_fin")
 
             if fecha_inicio > fecha_fin:
                 st.error("⚠️ La fecha inicial ('Desde') no puede ser posterior a la fecha final ('Hasta').")

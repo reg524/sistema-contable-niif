@@ -26,6 +26,50 @@ def _asegurar_columnas_empresas(conn):
   conn.commit()
 
 
+def _clonar_catalogo_inicial(cur, nuevo_empresa_id):
+  # 1. Intentar desde plantilla_catalogo_cuentas
+  plantilla = cur.execute(
+      "SELECT codigo, nombre, tipo, acepta_movimiento FROM"
+      " plantilla_catalogo_cuentas ORDER BY codigo"
+  ).fetchall()
+
+  # 2. Si la plantilla está vacía, tomar el catálogo base de la primera empresa existente
+  if not plantilla:
+    primera_emp = cur.execute(
+        "SELECT empresa_id FROM catalogo_cuentas LIMIT 1"
+    ).fetchone()
+    if primera_emp:
+      plantilla = cur.execute(
+          "SELECT codigo, nombre, tipo, acepta_movimiento FROM"
+          " catalogo_cuentas WHERE empresa_id=? ORDER BY codigo",
+          (primera_emp[0],),
+      ).fetchall()
+
+  if not plantilla:
+    return 0
+
+  max_cta_id = cur.execute(
+      "SELECT COALESCE(MAX(id), 0) FROM catalogo_cuentas"
+  ).fetchone()[0]
+  siguiente_id = int(max_cta_id) + 1
+
+  filas_insertar = []
+  for codigo, nombre, tipo, acepta in plantilla:
+    filas_insertar.append(
+        (siguiente_id, nuevo_empresa_id, codigo, nombre, tipo, acepta)
+    )
+    siguiente_id += 1
+
+  cur.executemany(
+      """
+        INSERT INTO catalogo_cuentas (id, empresa_id, codigo, nombre, tipo, acepta_movimiento)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+      filas_insertar,
+  )
+  return len(filas_insertar)
+
+
 def _respaldo_seguridad_previo(conn, db_path="sistema_contable.db"):
   try:
     conn.commit()
@@ -39,7 +83,9 @@ def _respaldo_seguridad_previo(conn, db_path="sistema_contable.db"):
 
 def render_gestion_empresas(conn):
   _asegurar_columnas_empresas(conn)
-  st.subheader("🏢 Administración de Contribuyentes (Personas Jurídicas y Físicas)")
+  st.subheader(
+      "🏢 Administración de Contribuyentes (Personas Jurídicas y Físicas)"
+  )
 
   tab_lista, tab_nueva, tab_editar, tab_borrar, tab_papelera = st.tabs([
       "📋 Contribuyentes Activos",
@@ -111,20 +157,20 @@ def render_gestion_empresas(conn):
           else "Nombre Comercial"
       ).strip()
       representante = (
-          ""
-          if es_fisica
-          else col2.text_input("Representante Legal").strip()
+          "" if es_fisica else col2.text_input("Representante Legal").strip()
       )
       actividad = (col2 if es_fisica else st).text_input(
           "Actividad Económica / Profesional"
       ).strip()
+      cargar_catalogo = st.checkbox(
+          "📚 Cargar automáticamente el Catálogo de Cuentas NIIF base",
+          value=True,
+      )
 
       submitted = st.form_submit_button("💾 Guardar Registro", type="primary")
       if submitted:
         if not cedula or not razon_social:
-          st.error(
-              "La Cédula y el Nombre / Razón Social son obligatorios."
-          )
+          st.error("La Cédula y el Nombre / Razón Social son obligatorios.")
         else:
           ced_norm = cedula.replace("-", "").replace(" ", "").lower()
           razon_norm = razon_social.lower()
@@ -168,10 +214,14 @@ def render_gestion_empresas(conn):
                     actividad,
                 ),
             )
+            cuentas_creadas = 0
+            if cargar_catalogo:
+              cuentas_creadas = _clonar_catalogo_inicial(cur, nuevo_id)
             conn.commit()
             subir_bd_a_sheets(conn)
             st.success(
-                f"✅ {tipo_nuevo} '{razon_social}' registrada correctamente."
+                f"✅ {tipo_nuevo} '{razon_social}' registrada con"
+                f" {cuentas_creadas} cuentas contables."
             )
             st.rerun()
 
@@ -246,6 +296,23 @@ def render_gestion_empresas(conn):
           conn.commit()
           subir_bd_a_sheets(conn)
           st.success("✅ Datos actualizados correctamente.")
+          st.rerun()
+
+      # Herramienta extra: si una empresa existente quedó con 0 cuentas, permitir cargarle el catálogo aquí mismo
+      cur = conn.cursor()
+      cant_ctas = cur.execute(
+          "SELECT COUNT(*) FROM catalogo_cuentas WHERE empresa_id=?",
+          (emp_id_ed,),
+      ).fetchone()[0]
+      if cant_ctas == 0:
+        st.warning(
+            "⚠️ Este contribuyente aún no tiene catálogo de cuentas cargado."
+        )
+        if st.button("📚 Cargar Catálogo de Cuentas NIIF Base Ahora"):
+          n_ins = _clonar_catalogo_inicial(cur, emp_id_ed)
+          conn.commit()
+          subir_bd_a_sheets(conn)
+          st.success(f"✅ Se cargaron {n_ins} cuentas contables.")
           st.rerun()
 
   # --- PESTAÑA 4: ELIMINAR DUPLICADO O ENVIAR A PAPELERA ---

@@ -4432,7 +4432,7 @@ def main():
             " empresas WHERE id = ? LIMIT 1)",
             (max_actual, old_id),
         )
-      conn.commit()
+            conn.commit()
         mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
         emp_sel = st.sidebar.selectbox("Seleccione Empresa:", list(mapa_emp.keys()))
         empresa_id = int(mapa_emp[emp_sel])

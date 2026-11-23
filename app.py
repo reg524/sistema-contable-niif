@@ -4406,13 +4406,13 @@ def main():
   inicializar_y_descargar_bd(conn)
   df_empresas = pd.read_sql_query("SELECT * FROM empresas", conn)
 
- if df_empresas.empty:
-      st.sidebar.warning(
-          "No hay empresas registradas aún. Crea una en el menú lateral."
+   if df_empresas.empty:
+     st.sidebar.warning(
+       "No hay empresas registradas aún. Crea una en el menú lateral."
       )
       empresa_id = None
       datos_emp = None
-    else:
+   else:
       st.sidebar.title("🏢 Empresa Activa")
       df_empresas["etiqueta"] = df_empresas.apply(
           lambda r: f"{r['razon_social']} ({r['cedula']})", axis=1
@@ -4430,7 +4430,7 @@ def main():
         max_actual = int(df_empresas["id"].max())
         for idx in df_empresas[df_empresas["id"] <= 0].index:
           max_actual += 1
-          old_id = int(df_empresas.at[idx, "id"])
+         old_id = int(df_empresas.at[idx, "id"])
           df_empresas.at[idx, "id"] = max_actual
           conn.execute(
               "UPDATE empresas SET id = ? WHERE rowid = (SELECT rowid FROM"

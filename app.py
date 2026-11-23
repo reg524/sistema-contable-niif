@@ -4406,62 +4406,70 @@ def main():
   inicializar_y_descargar_bd(conn)
   df_empresas = pd.read_sql_query("SELECT * FROM empresas", conn)
 
-  if df_empresas.empty:
-    st.warning("No hay empresas registradas aún. Crea una en el menú lateral.")
-    empresa_id = None
-  else:
-    st.sidebar.title("🏢 Empresa Activa")
-    df_empresas["etiqueta"] = df_empresas.apply(
-        lambda r: f"{r['razon_social']} ({r['cedula']})", axis=1
-    )
-    if "activa" in df_empresas.columns:
-      df_empresas = df_empresas[
-          pd.to_numeric(df_empresas["activa"], errors="coerce").fillna(1) == 1
-      ].copy()
-    df_empresas["id"] = (
-        pd.to_numeric(df_empresas["id"], errors="coerce").fillna(0).astype(int)
-    )
-    if (df_empresas["id"] <= 0).any():
-      max_actual = int(df_empresas["id"].max())
-      for idx in df_empresas[df_empresas["id"] <= 0].index:
-        max_actual += 1
-        old_id = int(df_empresas.at[idx, "id"])
-        df_empresas.at[idx, "id"] = max_actual
-        conn.execute(
-            "UPDATE empresas SET id = ? WHERE rowid = (SELECT rowid FROM"
-            " empresas WHERE id = ? LIMIT 1)",
-            (max_actual, old_id),
-            )
-        conn.commit()
-        mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
-        emp_sel = st.sidebar.selectbox("Seleccione Empresa:", list(mapa_emp.keys()))
-        empresa_id = int(mapa_emp[emp_sel])
-        datos_emp = df_empresas[df_empresas["id"] == empresa_id].iloc[0]
-    
+ if df_empresas.empty:
+      st.sidebar.warning(
+          "No hay empresas registradas aún. Crea una en el menú lateral."
+      )
+      empresa_id = None
+      datos_emp = None
+    else:
+      st.sidebar.title("🏢 Empresa Activa")
+      df_empresas["etiqueta"] = df_empresas.apply(
+          lambda r: f"{r['razon_social']} ({r['cedula']})", axis=1
+      )
+      if "activa" in df_empresas.columns:
+        df_empresas = df_empresas[
+            pd.to_numeric(df_empresas["activa"], errors="coerce").fillna(1) == 1
+        ].copy()
+      df_empresas["id"] = (
+          pd.to_numeric(df_empresas["id"], errors="coerce")
+          .fillna(0)
+          .astype(int)
+      )
+      if (df_empresas["id"] <= 0).any():
+        max_actual = int(df_empresas["id"].max())
+        for idx in df_empresas[df_empresas["id"] <= 0].index:
+          max_actual += 1
+          old_id = int(df_empresas.at[idx, "id"])
+          df_empresas.at[idx, "id"] = max_actual
+          conn.execute(
+              "UPDATE empresas SET id = ? WHERE rowid = (SELECT rowid FROM"
+              " empresas WHERE id = ? LIMIT 1)",
+              (max_actual, old_id),
+          )
+      conn.commit()
+      mapa_emp = dict(zip(df_empresas["etiqueta"], df_empresas["id"]))
+      emp_sel = st.sidebar.selectbox(
+          "Seleccione Empresa:", list(mapa_emp.keys())
+      )
+      empresa_id = int(mapa_emp[emp_sel])
+      datos_emp = df_empresas[df_empresas["id"] == empresa_id].iloc[0]
+
+    # 👇 ALINEADO CON `if` Y `else:` (4 espacios menos que `mapa_emp`)
     menu = st.sidebar.radio(
-      "Módulos del Sistema:",
-      [
-          "1. Empresas y Configuración",
-          "2. Catálogo de Cuentas y Saldos Iniciales",
-          "3. Elaboración y Gestión de Asientos",
-          "4. Libro Diario y Mayor",
-          "5. Balance de Comprobación",
-          "6. Estado de la Situación Financiera",
-          "7. Estado de Resultados",
-          "8. Estado de Flujo de Efectivo",
-          "9. Estado de Cambios en el Patrimonio",
-          "10. Flujo de Caja Proyectado",
-          "11. Análisis Financiero Integral",
-          "12. Conciliación Bancaria",
-          "13. Reporte de IVA (Hacienda CR)",
-          "14. Reporte de Renta (Hacienda CR)",
-          "15. Administración de Empresas",
-          "16. Respaldo y Restauración",
-      ],
-  )
-  st.sidebar.markdown("---")
-  if st.sidebar.button(
-      "🔄 Refrescar Datos de la Nube", use_container_width=True
+        "Módulos del Sistema:",
+        [
+            "1. Empresas y Configuración",
+            "2. Catálogo de Cuentas y Saldos Iniciales",
+            "3. Elaboración y Gestión de Asientos",
+            "4. Libro Diario y Mayor",
+            "5. Balance de Comprobación",
+            "6. Estado de la Situación Financiera",
+            "7. Estado de Resultados",
+            "8. Estado de Flujo de Efectivo",
+            "9. Estado de Cambios en el Patrimonio",
+            "10. Flujo de Caja Proyectado",
+            "11. Análisis Financiero Integral",
+            "12. Conciliación Bancaria",
+            "13. Reporte de IVA (Hacienda CR)",
+            "14. Reporte de Renta (Hacienda CR)",
+            "15. Administración de Empresas",
+            "16. Respaldo y Restauración",
+        ],
+    )
+    st.sidebar.markdown("---")
+    if st.sidebar.button(
+        "🔄 Refrescar Datos de la Nube", use_container_width=True
     ):
       forzar_refresco_desde_sheets(conn)
       st.sidebar.success("¡Datos sincronizados!")

@@ -4409,9 +4409,9 @@ def main():
   if df_empresas.empty:
      st.sidebar.warning(
        "No hay empresas registradas aún. Crea una en el menú lateral."
-      )
-      empresa_id = None
-      datos_emp = None
+     )
+     empresa_id = None
+     datos_emp = None
   else:
       st.sidebar.title("🏢 Empresa Activa")
       df_empresas["etiqueta"] = df_empresas.apply(

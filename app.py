@@ -4430,7 +4430,7 @@ def main():
         max_actual = int(df_empresas["id"].max())
         for idx in df_empresas[df_empresas["id"] <= 0].index:
           max_actual += 1
-         old_id = int(df_empresas.at[idx, "id"])
+          old_id = int(df_empresas.at[idx, "id"])
           df_empresas.at[idx, "id"] = max_actual
           conn.execute(
               "UPDATE empresas SET id = ? WHERE rowid = (SELECT rowid FROM"

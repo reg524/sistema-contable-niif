@@ -5,6 +5,7 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
+import analisis_financiero
 import mod_reportes
 import reporte_iva
 import reporte_renta
@@ -174,6 +175,7 @@ with st.sidebar:
             "📥 Importar desde Excel",
             "🏦 Conciliación Bancaria",
             "📑 Reportes Financieros NIIF",
+            "📊 Análisis Financiero Integral",
             "🧾 Liquidación IVA (D-104)",
             "🏛️ Impuesto Renta (D-101)",
             "🛡️ Respaldos y Nube",
@@ -863,7 +865,17 @@ elif menu == "📑 Reportes Financieros NIIF":
 
 
 # ==========================================
-# 7. MÓDULO: LIQUIDACIÓN IVA (D-104)
+# 7. MÓDULO: ANÁLISIS FINANCIERO INTEGRAL
+# ==========================================
+elif menu == "📊 Análisis Financiero Integral":
+    if not empresa_id:
+        st.info("Seleccione una empresa en el panel izquierdo.")
+    else:
+        analisis_financiero.renderizar_modulo_analisis_financiero(conn, empresa_id, empresa_info)
+
+
+# ==========================================
+# 8. MÓDULO: LIQUIDACIÓN IVA (D-104)
 # ==========================================
 elif menu == "🧾 Liquidación IVA (D-104)":
     if not empresa_id:
@@ -873,7 +885,7 @@ elif menu == "🧾 Liquidación IVA (D-104)":
 
 
 # ==========================================
-# 8. MÓDULO: IMPUESTO SOBRE LA RENTA (D-101)
+# 9. MÓDULO: IMPUESTO SOBRE LA RENTA (D-101)
 # ==========================================
 elif menu == "🏛️ Impuesto Renta (D-101)":
     if not empresa_id:
@@ -883,7 +895,7 @@ elif menu == "🏛️ Impuesto Renta (D-101)":
 
 
 # ==========================================
-# 9. MÓDULO: RESPALDOS Y NUBE
+# 10. MÓDULO: RESPALDOS Y NUBE
 # ==========================================
 elif menu == "🛡️ Respaldos y Nube":
     st.subheader("Respaldo Integral y Sincronización")

@@ -4445,8 +4445,8 @@ def main():
       empresa_id = int(mapa_emp[emp_sel])
       datos_emp = df_empresas[df_empresas["id"] == empresa_id].iloc[0]
 
-    # 👇 ALINEADO CON `if` Y `else:` (4 espacios menos que `mapa_emp`)
-    menu = st.sidebar.radio(
+      # 👇 ALINEADO CON `if` Y `else:` (4 espacios menos que `mapa_emp`)
+      menu = st.sidebar.radio(
         "Módulos del Sistema:",
         [
             "1. Empresas y Configuración",
@@ -4466,32 +4466,32 @@ def main():
             "15. Administración de Empresas",
             "16. Respaldo y Restauración",
         ],
-    )
-    st.sidebar.markdown("---")
-    if st.sidebar.button(
-        "🔄 Refrescar Datos de la Nube", use_container_width=True
-    ):
-      forzar_refresco_desde_sheets(conn)
-      st.sidebar.success("¡Datos sincronizados!")
-      st.rerun()
-  st.sidebar.divider()
-  st.sidebar.subheader("🛡️ Seguridad y Respaldo")
-  if st.sidebar.button("💾 Crear Backup Ahora", use_container_width=True):
-    ruta_zip = ejecutar_backup_automatico()
-    st.sidebar.success(f"Backup guardado: {os.path.basename(ruta_zip)}")
+      )
+      st.sidebar.markdown("---")
+      if st.sidebar.button(
+      "🔄 Refrescar Datos de la Nube", use_container_width=True
+      ):
+        forzar_refresco_desde_sheets(conn)
+        st.sidebar.success("¡Datos sincronizados!")
+        st.rerun()
+      st.sidebar.divider()
+      st.sidebar.subheader("🛡️ Seguridad y Respaldo")
+      if st.sidebar.button("💾 Crear Backup Ahora", use_container_width=True):
+        ruta_zip = ejecutar_backup_automatico()
+        st.sidebar.success(f"Backup guardado: {os.path.basename(ruta_zip)}")
 
-  lista_zips = sorted(
-      glob.glob(os.path.join(BACKUP_DIR, "Backup_Contable_*.zip"))
-  )
-  if lista_zips:
-    ultimo_zip = lista_zips[-1]
-    with open(ultimo_zip, "rb") as f_zip:
-      st.sidebar.download_button(
-          label="📥 Descargar Último Backup (.zip)",
-          data=f_zip.read(),
-          file_name=os.path.basename(ultimo_zip),
-          mime="application/zip",
-          use_container_width=True,
+      lista_zips = sorted(
+          glob.glob(os.path.join(BACKUP_DIR, "Backup_Contable_*.zip"))
+      )
+      if lista_zips:
+        ultimo_zip = lista_zips[-1]
+        with open(ultimo_zip, "rb") as f_zip:
+          st.sidebar.download_button(
+              label="📥 Descargar Último Backup (.zip)",
+              data=f_zip.read(),
+              file_name=os.path.basename(ultimo_zip),
+              mime="application/zip",
+              use_container_width=True,
       )
 
   # --- 1. EMPRESAS ---

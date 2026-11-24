@@ -202,6 +202,93 @@ def obtener_catalogo(conn, empresa_id):
     )
 
 
+def crear_cuenta_catalogo(conn, empresa_id, codigo, nombre, tipo, acepta_movimiento=1):
+    """Crea una cuenta contable validando duplicados por código en la empresa."""
+    cod = str(codigo or "").strip()
+    nom = str(nombre or "").strip()
+    if not cod or not nom:
+        return False, "El código y el nombre de la cuenta son obligatorios."
+
+    existe = pd.read_sql_query(
+        "SELECT id FROM catalogo_cuentas WHERE empresa_id = ? AND codigo = ?",
+        conn,
+        params=(int(empresa_id), cod),
+    )
+    if not existe.empty:
+        return False, f"El código '{cod}' ya existe en esta empresa."
+
+    conn.execute(
+        """
+        INSERT INTO catalogo_cuentas (empresa_id, codigo, nombre, tipo, acepta_movimiento)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (int(empresa_id), cod, nom, str(tipo).strip(), int(acepta_movimiento)),
+    )
+    guardar_y_sincronizar(conn)
+    return True, f"Cuenta '{cod} - {nom}' creada correctamente."
+
+
+def actualizar_cuenta_catalogo(conn, empresa_id, cuenta_id, codigo, nombre, tipo, acepta_movimiento):
+    """Modifica los datos de una cuenta existente en la empresa."""
+    cod = str(codigo or "").strip()
+    nom = str(nombre or "").strip()
+    if not cod or not nom:
+        return False, "El código y el nombre de la cuenta son obligatorios."
+
+    duplicado = pd.read_sql_query(
+        "SELECT id FROM catalogo_cuentas WHERE empresa_id = ? AND codigo = ? AND id != ?",
+        conn,
+        params=(int(empresa_id), cod, int(cuenta_id)),
+    )
+    if not duplicado.empty:
+        return False, f"Ya existe otra cuenta con el código '{cod}' en esta empresa."
+
+    conn.execute(
+        """
+        UPDATE catalogo_cuentas
+        SET codigo = ?, nombre = ?, tipo = ?, acepta_movimiento = ?
+        WHERE id = ? AND empresa_id = ?
+        """,
+        (cod, nom, str(tipo).strip(), int(acepta_movimiento), int(cuenta_id), int(empresa_id)),
+    )
+    guardar_y_sincronizar(conn)
+    return True, f"Cuenta '{cod} - {nom}' actualizada correctamente."
+
+
+def eliminar_cuenta_catalogo(conn, empresa_id, cuenta_id):
+    """Elimina una cuenta solo si no tiene asientos ni saldos iniciales asociados."""
+    cid = int(cuenta_id)
+    eid = int(empresa_id)
+
+    en_asientos = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM asientos_detalle ad
+        JOIN asientos_cabecera ac ON ad.asiento_id = ac.id
+        WHERE ac.empresa_id = ? AND ad.cuenta_id = ?
+        """,
+        (eid, cid),
+    ).fetchone()[0]
+
+    en_saldos = conn.execute(
+        "SELECT COUNT(*) FROM saldos_iniciales WHERE empresa_id = ? AND cuenta_id = ?",
+        (eid, cid),
+    ).fetchone()[0]
+
+    if en_asientos > 0 or en_saldos > 0:
+        return (
+            False,
+            f"No se puede eliminar la cuenta porque tiene {en_asientos} línea(s) en asientos y {en_saldos} saldo(s) inicial(es).",
+        )
+
+    conn.execute(
+        "DELETE FROM catalogo_cuentas WHERE id = ? AND empresa_id = ?",
+        (cid, eid),
+    )
+    guardar_y_sincronizar(conn)
+    return True, "Cuenta eliminada correctamente."
+
+
 def ejecutar_backup_automatico(db_path):
     os.makedirs("backups", exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -356,7 +443,7 @@ if menu == "🏢 Empresas y Catálogo":
                             )
                         guardar_y_sincronizar(conn)
                         st.session_state["emp_editar_sel_id"] = int(nueva_emp_id)
-                        st.success(f"Empresa '{razon_social}' creada correctamente. Ya puedes modificarla o eliminarla abajo.")
+                        st.success(f"Empresa '{razon_social}' creada correctamente.")
                         st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("Ya existe una empresa registrada con esa cédula.")
@@ -496,7 +583,10 @@ if menu == "🏢 Empresas y Catálogo":
             st.info("Seleccione o cree una empresa primero.")
         else:
             st.subheader(f"Catálogo de Cuentas — {empresa_info['razon_social']}")
+
+            # 1. Crear cuenta
             with st.form("form_nueva_cuenta", clear_on_submit=True):
+                st.markdown("**➕ Crear Nueva Cuenta**")
                 c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
                 cod_cta = c1.text_input("Código *", placeholder="Ej: 1.1.01.05")
                 nom_cta = c2.text_input("Nombre de la Cuenta *", placeholder="Ej: Banco Nacional Colones")
@@ -504,33 +594,19 @@ if menu == "🏢 Empresas y Catálogo":
                 acepta_mov = c4.selectbox("¿Acepta Movimiento?", ["Sí (Detalle)", "No (Título/Mayor)"])
 
                 if st.form_submit_button("➕ Agregar Cuenta", type="primary"):
-                    if not cod_cta.strip() or not nom_cta.strip():
-                        st.error("El código y el nombre son obligatorios.")
+                    ok, msg = crear_cuenta_catalogo(
+                        conn,
+                        empresa_id,
+                        cod_cta,
+                        nom_cta,
+                        tipo_cta,
+                        1 if acepta_mov.startswith("Sí") else 0,
+                    )
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
                     else:
-                        existe = pd.read_sql_query(
-                            "SELECT id FROM catalogo_cuentas WHERE empresa_id = ? AND codigo = ?",
-                            conn,
-                            params=(empresa_id, cod_cta.strip()),
-                        )
-                        if not existe.empty:
-                            st.error(f"El código {cod_cta.strip()} ya existe en esta empresa.")
-                        else:
-                            conn.execute(
-                                """
-                                INSERT INTO catalogo_cuentas (empresa_id, codigo, nombre, tipo, acepta_movimiento)
-                                VALUES (?, ?, ?, ?, ?)
-                                """,
-                                (
-                                    empresa_id,
-                                    cod_cta.strip(),
-                                    nom_cta.strip(),
-                                    tipo_cta,
-                                    1 if acepta_mov.startswith("Sí") else 0,
-                                ),
-                            )
-                            guardar_y_sincronizar(conn)
-                            st.success("Cuenta agregada correctamente.")
-                            st.rerun()
+                        st.error(msg)
 
             df_cat = obtener_catalogo(conn, empresa_id)
             if not df_cat.empty:
@@ -546,6 +622,72 @@ if menu == "🏢 Empresas y Catálogo":
                         "acepta_movimiento": st.column_config.CheckboxColumn("Movimiento"),
                     },
                 )
+
+                # 2. Modificar o borrar cuenta existente
+                st.divider()
+                st.markdown("**✏️ Modificar o 🗑️ Borrar Cuenta Existente**")
+                ids_cta = [int(x) for x in df_cat["id"].tolist()]
+                cta_edit_id = st.selectbox(
+                    "Seleccione la cuenta a modificar o eliminar:",
+                    ids_cta,
+                    format_func=lambda x: (
+                        f"{df_cat[df_cat['id']==x]['codigo'].values[0]} - "
+                        f"{df_cat[df_cat['id']==x]['nombre'].values[0]} "
+                        f"({df_cat[df_cat['id']==x]['tipo'].values[0]})"
+                    ),
+                    key="sel_cta_gestion",
+                )
+                cta_row = df_cat[df_cat["id"] == cta_edit_id].iloc[0]
+                tipos_cta_disp = ["Activo", "Pasivo", "Patrimonio", "Ingreso", "Costo", "Gasto"]
+                tipo_cta_act = str(cta_row["tipo"] or "Activo")
+                if tipo_cta_act not in tipos_cta_disp:
+                    tipos_cta_disp.append(tipo_cta_act)
+
+                with st.form(f"form_editar_cuenta_{cta_edit_id}"):
+                    ec1, ec2, ec3, ec4 = st.columns([2, 4, 2, 2])
+                    ed_cod = ec1.text_input("Código *", value=str(cta_row["codigo"] or ""))
+                    ed_nom = ec2.text_input("Nombre de la Cuenta *", value=str(cta_row["nombre"] or ""))
+                    ed_tipo = ec3.selectbox("Tipo *", tipos_cta_disp, index=tipos_cta_disp.index(tipo_cta_act))
+                    ed_mov = ec4.selectbox(
+                        "¿Acepta Movimiento?",
+                        ["Sí (Detalle)", "No (Título/Mayor)"],
+                        index=0 if int(cta_row["acepta_movimiento"] or 0) == 1 else 1,
+                    )
+
+                    if st.form_submit_button("💾 Guardar Cambios de Cuenta", type="primary"):
+                        ok, msg = actualizar_cuenta_catalogo(
+                            conn,
+                            empresa_id,
+                            cta_edit_id,
+                            ed_cod,
+                            ed_nom,
+                            ed_tipo,
+                            1 if ed_mov.startswith("Sí") else 0,
+                        )
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+                with st.expander(f"🗑️ Borrar Cuenta: {cta_row['codigo']} - {cta_row['nombre']}"):
+                    st.caption("Solo se pueden eliminar cuentas que no tengan asientos contables ni saldos iniciales.")
+                    conf_cta = st.checkbox(
+                        f"Confirmo borrar la cuenta '{cta_row['codigo']} - {cta_row['nombre']}'",
+                        key=f"conf_cta_{cta_edit_id}",
+                    )
+                    if st.button(
+                        "🗑️ Borrar Cuenta",
+                        type="secondary",
+                        disabled=not conf_cta,
+                        key=f"btn_borrar_cta_{cta_edit_id}",
+                    ):
+                        ok, msg = eliminar_cuenta_catalogo(conn, empresa_id, cta_edit_id)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
     with tab_plantilla:
         st.subheader("Importar / Actualizar Plantilla Maestra desde Excel")
@@ -663,11 +805,35 @@ elif menu == "📝 Asientos Contables":
         tab_reg, tab_cons = st.tabs(["✍️ Registrar Nuevo Asiento", "📖 Consultar Libro Diario"])
 
         with tab_reg:
+            # Creación rápida de cuenta sin salir de Asientos Contables
+            with st.expander("➕ Crear Cuenta Rápida (sin ir a Catálogo de Cuentas)", expanded=False):
+                with st.form("form_cuenta_rapida_asiento", clear_on_submit=True):
+                    rc1, rc2, rc3, rc4 = st.columns([2, 4, 2, 2])
+                    r_cod = rc1.text_input("Código Cuenta *", placeholder="Ej: 5.1.01.10")
+                    r_nom = rc2.text_input("Nombre Cuenta *", placeholder="Ej: Combustibles y Lubricantes")
+                    r_tipo = rc3.selectbox("Tipo NIIF *", ["Gasto", "Costo", "Ingreso", "Activo", "Pasivo", "Patrimonio"])
+                    r_mov = rc4.selectbox("Acepta Movimiento", ["Sí (Detalle)", "No (Título/Mayor)"])
+
+                    if st.form_submit_button("⚡ Crear y Habilitar en Asiento", type="primary"):
+                        ok, msg = crear_cuenta_catalogo(
+                            conn,
+                            empresa_id,
+                            r_cod,
+                            r_nom,
+                            r_tipo,
+                            1 if r_mov.startswith("Sí") else 0,
+                        )
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
             df_cat = obtener_catalogo(conn, empresa_id)
             df_mov = df_cat[df_cat["acepta_movimiento"] == 1].copy()
 
             if df_mov.empty:
-                st.warning("Configure primero el catálogo de cuentas.")
+                st.warning("Configure primero al menos una cuenta de movimiento (puedes crearla arriba).")
             else:
                 cur = conn.cursor()
                 max_num = cur.execute(
@@ -768,6 +934,13 @@ elif menu == "📝 Asientos Contables":
                             "Haber": [0.0, 0.0],
                         }
                     )
+                else:
+                    # Asegura que cualquier cuenta recién creada aparezca en las opciones del selector
+                    df_prev = st.session_state["lineas_asiento_df"].copy()
+                    df_prev["Cuenta"] = df_prev["Cuenta"].apply(
+                        lambda x: x if x in opciones_cuentas else opciones_cuentas[0]
+                    )
+                    st.session_state["lineas_asiento_df"] = df_prev
 
                 etiqueta_debe = "Debe (USD $)" if es_usd else "Debe (₡)"
                 etiqueta_haber = "Haber (USD $)" if es_usd else "Haber (₡)"

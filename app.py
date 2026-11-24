@@ -9,6 +9,7 @@ import analisis_financiero
 import mod_reportes
 import reporte_iva
 import reporte_renta
+import tc_bccr
 from sync_sheets import (
     forzar_refresco_desde_sheets,
     inicializar_y_descargar_bd,
@@ -68,11 +69,26 @@ def renderizar_encabezado_corporativo(empresa_info, subtitulo=""):
         f"""
         <div class="main-header">
             <h2>🏢 {razon}</h2>
-            <p>Cédula: <b>{cedula}</b> | Régimen: <b>{tipo}</b> | {subtitulo}</p>
+            <p>Cédula: <b>{cedula}</b> | Régimen: <b>{tipo}</b> | Moneda Base: <b>Colones (₡)</b> | {subtitulo}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _parsear_fecha_segura(valor, por_defecto=datetime.date(2025, 1, 1)):
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return por_defecto
+    texto = str(valor).strip()
+    if not texto or texto.lower() in ("none", "nan", "nat"):
+        return por_defecto
+    try:
+        dt = pd.to_datetime(texto, errors="coerce")
+        if pd.isna(dt):
+            return por_defecto
+        return dt.date()
+    except Exception:
+        return por_defecto
 
 
 aplicar_estilos_corporativos()
@@ -87,8 +103,36 @@ def obtener_conexion():
     return conn
 
 
+def asegurar_columnas_multimoneda(conn):
+    """Agrega columnas multimoneda de forma segura si aún no existen."""
+    cols_cab = {
+        r[1] for r in conn.execute("PRAGMA table_info(asientos_cabecera)").fetchall()
+    }
+    if "moneda_dig" not in cols_cab:
+        conn.execute("ALTER TABLE asientos_cabecera ADD COLUMN moneda_dig TEXT DEFAULT 'CRC'")
+    if "tipo_cambio_bccr" not in cols_cab:
+        conn.execute("ALTER TABLE asientos_cabecera ADD COLUMN tipo_cambio_bccr REAL DEFAULT 1.0")
+    if "modalidad_tc" not in cols_cab:
+        conn.execute("ALTER TABLE asientos_cabecera ADD COLUMN modalidad_tc TEXT DEFAULT 'N/A'")
+
+    cols_det = {
+        r[1] for r in conn.execute("PRAGMA table_info(asientos_detalle)").fetchall()
+    }
+    if "moneda_origen" not in cols_det:
+        conn.execute("ALTER TABLE asientos_detalle ADD COLUMN moneda_origen TEXT DEFAULT 'CRC'")
+    if "monto_usd_debe" not in cols_det:
+        conn.execute("ALTER TABLE asientos_detalle ADD COLUMN monto_usd_debe REAL DEFAULT 0.0")
+    if "monto_usd_haber" not in cols_det:
+        conn.execute("ALTER TABLE asientos_detalle ADD COLUMN monto_usd_haber REAL DEFAULT 0.0")
+    if "tipo_cambio_aplicado" not in cols_det:
+        conn.execute("ALTER TABLE asientos_detalle ADD COLUMN tipo_cambio_aplicado REAL DEFAULT 1.0")
+    conn.commit()
+
+
 conn = obtener_conexion()
 inicializar_y_descargar_bd(conn)
+asegurar_columnas_multimoneda(conn)
+tc_bccr.asegurar_tabla_tc(conn)
 
 
 def guardar_y_sincronizar(conn):
@@ -100,6 +144,49 @@ def obtener_empresas(conn):
     return pd.read_sql_query(
         "SELECT * FROM empresas WHERE activa = 1 ORDER BY razon_social", conn
     )
+
+
+def obtener_todas_empresas(conn):
+    return pd.read_sql_query(
+        "SELECT * FROM empresas ORDER BY id DESC", conn
+    )
+
+
+def _tabla_existe(conn, nombre_tabla):
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (nombre_tabla,),
+    ).fetchone()
+    return row is not None
+
+
+def eliminar_empresa_completa(conn, emp_id):
+    """Elimina una empresa y sus registros asociados de forma segura."""
+    emp_id = int(emp_id)
+    cur = conn.cursor()
+
+    if _tabla_existe(conn, "asientos_detalle") and _tabla_existe(conn, "asientos_cabecera"):
+        cur.execute(
+            """
+            DELETE FROM asientos_detalle
+            WHERE asiento_id IN (SELECT id FROM asientos_cabecera WHERE empresa_id = ?)
+            """,
+            (emp_id,),
+        )
+        cur.execute("DELETE FROM asientos_cabecera WHERE empresa_id = ?", (emp_id,))
+
+    for tabla in [
+        "saldos_iniciales",
+        "conciliaciones_bancarias",
+        "declaraciones_iva",
+        "declaraciones_renta",
+        "catalogo_cuentas",
+    ]:
+        if _tabla_existe(conn, tabla):
+            cur.execute(f"DELETE FROM {tabla} WHERE empresa_id = ?", (emp_id,))
+
+    cur.execute("DELETE FROM empresas WHERE id = ?", (emp_id,))
+    guardar_y_sincronizar(conn)
 
 
 def obtener_catalogo(conn, empresa_id):
@@ -268,21 +355,141 @@ if menu == "🏢 Empresas y Catálogo":
                                 (nueva_emp_id,),
                             )
                         guardar_y_sincronizar(conn)
-                        st.success(f"Empresa '{razon_social}' creada correctamente.")
+                        st.session_state["emp_editar_sel_id"] = int(nueva_emp_id)
+                        st.success(f"Empresa '{razon_social}' creada correctamente. Ya puedes modificarla o eliminarla abajo.")
                         st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("Ya existe una empresa registrada con esa cédula.")
 
-        if not df_empresas.empty:
+        df_todas_emp = obtener_todas_empresas(conn)
+
+        if not df_todas_emp.empty:
             st.divider()
             st.subheader("Empresas Registradas")
             st.dataframe(
-                df_empresas[
-                    ["id", "cedula", "razon_social", "tipo_contribuyente", "representante_legal", "fecha_inicio_actividades"]
+                df_todas_emp[
+                    [
+                        "id",
+                        "cedula",
+                        "razon_social",
+                        "nombre_comercial",
+                        "tipo_contribuyente",
+                        "representante_legal",
+                        "fecha_inicio_actividades",
+                        "activa",
+                    ]
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
+
+            st.divider()
+            st.subheader("✏️ Modificar o 🗑️ Eliminar Empresa")
+
+            ids_disponibles = [int(x) for x in df_todas_emp["id"].tolist()]
+            default_id = st.session_state.get("emp_editar_sel_id", empresa_id or ids_disponibles[0])
+            if default_id not in ids_disponibles:
+                default_id = ids_disponibles[0]
+
+            emp_sel_id = st.selectbox(
+                "Seleccione la empresa a modificar o eliminar:",
+                ids_disponibles,
+                index=ids_disponibles.index(default_id),
+                format_func=lambda x: (
+                    f"[{x}] {df_todas_emp[df_todas_emp['id']==x]['razon_social'].values[0]} "
+                    f"({df_todas_emp[df_todas_emp['id']==x]['cedula'].values[0]})"
+                ),
+                key="selector_gestion_empresa",
+            )
+            st.session_state["emp_editar_sel_id"] = int(emp_sel_id)
+            emp_row = df_todas_emp[df_todas_emp["id"] == emp_sel_id].iloc[0]
+
+            tipos_posibles = [
+                "Persona Jurídica",
+                "Persona Física",
+                "Asociación / ASADA",
+                "Régimen Simplificado",
+            ]
+            tipo_actual = str(emp_row.get("tipo_contribuyente") or tipos_posibles[0])
+            if tipo_actual not in tipos_posibles:
+                tipos_posibles.append(tipo_actual)
+
+            fecha_act_dt = _parsear_fecha_segura(emp_row.get("fecha_inicio_actividades"))
+
+            with st.form(f"form_editar_empresa_{emp_sel_id}"):
+                e1, e2, e3 = st.columns(3)
+                ed_tipo = e1.selectbox(
+                    "Tipo de Contribuyente",
+                    tipos_posibles,
+                    index=tipos_posibles.index(tipo_actual),
+                )
+                ed_cedula = e2.text_input("Cédula Jurídica / Física *", value=str(emp_row.get("cedula") or ""))
+                ed_razon = e3.text_input("Razón Social / Nombre *", value=str(emp_row.get("razon_social") or ""))
+
+                e4, e5, e6 = st.columns(3)
+                ed_nom_com = e4.text_input("Nombre Comercial", value=str(emp_row.get("nombre_comercial") or ""))
+                ed_rep = e5.text_input("Representante Legal", value=str(emp_row.get("representante_legal") or ""))
+                ed_fecha = e6.date_input("Fecha Inicio Actividades", value=fecha_act_dt)
+
+                ea1, ea2 = st.columns([4, 1])
+                ed_act_econ = ea1.text_input("Actividad Económica (CIIU)", value=str(emp_row.get("actividad_economica") or ""))
+                ed_activa = ea2.checkbox("Empresa Activa", value=bool(int(emp_row.get("activa") or 0)))
+
+                if st.form_submit_button("💾 Guardar Cambios de Empresa", type="primary"):
+                    if not ed_cedula.strip() or not ed_razon.strip():
+                        st.error("La cédula y la razón social son obligatorias.")
+                    else:
+                        try:
+                            conn.execute(
+                                """
+                                UPDATE empresas
+                                SET tipo_contribuyente = ?,
+                                    cedula = ?,
+                                    razon_social = ?,
+                                    nombre_comercial = ?,
+                                    representante_legal = ?,
+                                    actividad_economica = ?,
+                                    fecha_inicio_actividades = ?,
+                                    activa = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    ed_tipo,
+                                    ed_cedula.strip(),
+                                    ed_razon.strip(),
+                                    ed_nom_com.strip(),
+                                    ed_rep.strip(),
+                                    ed_act_econ.strip(),
+                                    str(ed_fecha),
+                                    1 if ed_activa else 0,
+                                    int(emp_sel_id),
+                                ),
+                            )
+                            guardar_y_sincronizar(conn)
+                            st.success(f"Empresa '{ed_razon.strip()}' actualizada correctamente.")
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error("Ya existe otra empresa registrada con esa cédula.")
+
+            with st.expander(f"🗑️ Eliminar Empresa: {emp_row['razon_social']} (ID {emp_sel_id})"):
+                st.warning(
+                    "Esta acción eliminará permanentemente la empresa seleccionada y todos sus datos "
+                    "contables asociados (catálogo de cuentas, saldos iniciales, asientos, conciliaciones y declaraciones)."
+                )
+                confirmar_borrado = st.checkbox(
+                    f"Confirmo que deseo eliminar permanentemente a '{emp_row['razon_social']}'",
+                    key=f"conf_borrar_emp_{emp_sel_id}",
+                )
+                if st.button(
+                    "🗑️ Eliminar Empresa Permanentemente",
+                    type="secondary",
+                    disabled=not confirmar_borrado,
+                    key=f"btn_borrar_emp_{emp_sel_id}",
+                ):
+                    eliminar_empresa_completa(conn, emp_sel_id)
+                    st.session_state.pop("emp_editar_sel_id", None)
+                    st.success("Empresa eliminada correctamente.")
+                    st.rerun()
 
     with tab_cat:
         if not empresa_id:
@@ -382,7 +589,7 @@ elif menu == "💰 Saldos Iniciales":
     if not empresa_id:
         st.info("Seleccione una empresa en el panel izquierdo.")
     else:
-        st.subheader("Registro de Saldos Iniciales de Apertura")
+        st.subheader("Registro de Saldos Iniciales de Apertura (en Colones ₡)")
         df_cat = obtener_catalogo(conn, empresa_id)
         df_mov = df_cat[df_cat["acepta_movimiento"] == 1].copy()
 
@@ -474,7 +681,75 @@ elif menu == "📝 Asientos Contables":
                 tipo_asiento = c3.selectbox("Tipo de Asiento", ["Diario", "Ingresos", "Egresos", "Ajuste", "Cierre"])
                 num_comp = c4.text_input("N° Comprobante / Factura", placeholder="Ej: FE-00125")
 
-                concepto = st.text_input("Concepto / Descripción General *", placeholder="Ej: Registro de factura de servicios profesionales")
+                st.markdown("#### 💱 Moneda de Digitación y Tipo de Cambio BCCR")
+                m_c1, m_c2, m_c3, m_c4 = st.columns([2, 2, 2, 2])
+                moneda_dig = m_c1.selectbox(
+                    "Moneda a Digitar",
+                    ["Colones (CRC)", "Dólares (USD)"],
+                    key="asiento_moneda_dig",
+                )
+                es_usd = moneda_dig.startswith("Dólares")
+
+                tipo_tc_sel = m_c2.selectbox(
+                    "Tipo de Cambio BCCR",
+                    ["Compra BCCR (317)", "Venta BCCR (318)", "Manual"],
+                    index=1 if tipo_asiento in ["Egresos"] else 0,
+                    key="asiento_tipo_tc",
+                )
+
+                modo_tc = "venta" if "318" in tipo_tc_sel else ("compra" if "317" in tipo_tc_sel else "manual")
+                tc_sugerido, origen_tc = tc_bccr.obtener_tc_bccr(
+                    conn,
+                    fecha_asiento,
+                    tipo_tc=modo_tc,
+                    tc_manual_fallback=st.session_state.get("tc_guardado_manual", 510.0),
+                )
+
+                col_tc_btn, _ = m_c3.columns([1, 2])
+                if col_tc_btn.button("🔄 BCCR", help="Consultar o actualizar tipo de cambio BCCR para la fecha"):
+                    ind_code = "318" if modo_tc == "venta" else "317"
+                    val_fresh, det_fresh = tc_bccr.consultar_tc_bccr_webservice(fecha_asiento, indicador=ind_code)
+                    if val_fresh:
+                        tc_bccr.guardar_tc_en_cache(conn, fecha_asiento, ind_code, val_fresh, fuente="BCCR")
+                        st.session_state["tc_valor_actual"] = float(val_fresh)
+                        st.toast(f"TC BCCR ({ind_code}) actualizado: ₡ {val_fresh:,.4f}", icon="✅")
+                    else:
+                        st.warning(det_fresh)
+
+                valor_tc_default = float(
+                    st.session_state.get(
+                        "tc_valor_actual",
+                        tc_sugerido if (tc_sugerido and tc_sugerido > 0) else 510.0,
+                    )
+                )
+                if not es_usd and modo_tc != "manual":
+                    valor_tc_default = float(tc_sugerido) if (tc_sugerido and tc_sugerido > 0) else 1.0
+
+                tc_aplicado = m_c3.number_input(
+                    "Tipo de Cambio (₡ / USD)",
+                    min_value=0.0001,
+                    value=valor_tc_default if es_usd else (valor_tc_default if valor_tc_default > 1 else 1.0),
+                    step=0.05,
+                    format="%.4f",
+                    key="asiento_tc_valor",
+                )
+                if modo_tc == "manual" and es_usd:
+                    st.session_state["tc_guardado_manual"] = float(tc_aplicado)
+                    tc_bccr.guardar_tc_en_cache(
+                        conn,
+                        fecha_asiento,
+                        "318" if "318" in tipo_tc_sel else "317",
+                        float(tc_aplicado),
+                        fuente="Manual",
+                    )
+
+                m_c4.caption(f"Estado TC: {origen_tc}")
+                m_c4.info("Los libros y estados se contabilizan en **Colones (₡)**.")
+
+                concepto = st.text_input(
+                    "Concepto / Descripción General *",
+                    placeholder="Ej: Pago de factura en USD convertida a colones según TC BCCR",
+                )
 
                 c5, c6, c7 = st.columns(3)
                 forma_pago = c5.selectbox("Forma de Pago", ["Transferencia / SINPE", "Efectivo", "Cheque", "Tarjeta", "Crédito / N/A"])
@@ -494,6 +769,9 @@ elif menu == "📝 Asientos Contables":
                         }
                     )
 
+                etiqueta_debe = "Debe (USD $)" if es_usd else "Debe (₡)"
+                etiqueta_haber = "Haber (USD $)" if es_usd else "Haber (₡)"
+
                 df_editado = st.data_editor(
                     st.session_state["lineas_asiento_df"],
                     num_rows="dynamic",
@@ -502,20 +780,32 @@ elif menu == "📝 Asientos Contables":
                         "Cuenta": st.column_config.SelectboxColumn(
                             "Cuenta Contable", options=opciones_cuentas, required=True, width="large"
                         ),
-                        "Debe": st.column_config.NumberColumn("Debe (₡)", min_value=0.0, format="%.2f", default=0.0),
-                        "Haber": st.column_config.NumberColumn("Haber (₡)", min_value=0.0, format="%.2f", default=0.0),
+                        "Debe": st.column_config.NumberColumn(etiqueta_debe, min_value=0.0, format="%.2f", default=0.0),
+                        "Haber": st.column_config.NumberColumn(etiqueta_haber, min_value=0.0, format="%.2f", default=0.0),
                     },
                     key="editor_asientos",
                 )
 
-                tot_d = float(df_editado["Debe"].fillna(0).sum())
-                tot_h = float(df_editado["Haber"].fillna(0).sum())
-                dif_asiento = round(tot_d - tot_h, 2)
+                factor_conv = float(tc_aplicado) if es_usd else 1.0
+                tot_d_dig = float(df_editado["Debe"].fillna(0).sum())
+                tot_h_dig = float(df_editado["Haber"].fillna(0).sum())
+                dif_dig = round(tot_d_dig - tot_h_dig, 2)
 
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Total Debe", f"₡ {tot_d:,.2f}")
-                k2.metric("Total Haber", f"₡ {tot_h:,.2f}")
-                k3.metric("Diferencia", f"₡ {dif_asiento:,.2f}")
+                tot_d_crc = round(tot_d_dig * factor_conv, 2)
+                tot_h_crc = round(tot_h_dig * factor_conv, 2)
+                dif_crc = round(tot_d_crc - tot_h_crc, 2)
+
+                if es_usd:
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.metric("Total Debe (USD)", f"$ {tot_d_dig:,.2f}")
+                    k2.metric("Total Haber (USD)", f"$ {tot_h_dig:,.2f}")
+                    k3.metric("Convertido Debe (₡)", f"₡ {tot_d_crc:,.2f}")
+                    k4.metric("Convertido Haber (₡)", f"₡ {tot_h_crc:,.2f}")
+                else:
+                    k1, k2, k3 = st.columns(3)
+                    k1.metric("Total Debe (₡)", f"₡ {tot_d_crc:,.2f}")
+                    k2.metric("Total Haber (₡)", f"₡ {tot_h_crc:,.2f}")
+                    k3.metric("Diferencia (₡)", f"₡ {dif_crc:,.2f}")
 
                 if st.button("💾 Contabilizar Asiento", type="primary"):
                     lineas_validas = df_editado[
@@ -525,25 +815,37 @@ elif menu == "📝 Asientos Contables":
                         st.error("Debe indicar el concepto del asiento.")
                     elif len(lineas_validas) < 2:
                         st.error("Un asiento contable requiere al menos 2 líneas con movimiento.")
-                    elif abs(dif_asiento) >= 0.01:
-                        st.error(f"El asiento está descuadrado por ₡ {dif_asiento:,.2f}. Debe = Haber.")
+                    elif es_usd and factor_conv <= 0:
+                        st.error("Debe ingresar un tipo de cambio válido mayor a cero para convertir USD a colones.")
+                    elif abs(dif_dig) >= 0.01:
+                        st.error(
+                            f"El asiento está descuadrado por {dif_dig:,.2f} "
+                            f"{'USD' if es_usd else '₡'}. Debe = Haber."
+                        )
                     else:
                         periodo_str = fecha_asiento.strftime("%Y-%m")
                         ahora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        moneda_cod = "USD" if es_usd else "CRC"
+                        concepto_final = concepto.strip()
+                        if es_usd and "(USD " not in concepto_final:
+                            concepto_final = (
+                                f"{concepto_final} [USD $ {tot_d_dig:,.2f} @ TC ₡ {factor_conv:,.4f}]"
+                            )
+
                         cur.execute(
                             """
                             INSERT INTO asientos_cabecera (
                                 empresa_id, num_asiento, fecha, periodo, concepto, tipo_asiento,
                                 fecha_registro, fecha_comprobante, forma_pago, num_comprobante,
-                                num_cheque, usuario_creacion
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                num_cheque, usuario_creacion, moneda_dig, tipo_cambio_bccr, modalidad_tc
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 empresa_id,
                                 int(num_asiento),
                                 str(fecha_asiento),
                                 periodo_str,
-                                concepto.strip(),
+                                concepto_final,
                                 tipo_asiento,
                                 ahora_str,
                                 str(fecha_asiento),
@@ -551,28 +853,51 @@ elif menu == "📝 Asientos Contables":
                                 num_comp.strip(),
                                 num_cheque.strip(),
                                 usuario_crea.strip(),
+                                moneda_cod,
+                                float(factor_conv),
+                                tipo_tc_sel if es_usd else "N/A",
                             ),
                         )
                         nuevo_asiento_id = cur.lastrowid
                         for _, linea in lineas_validas.iterrows():
                             cid = mapa_cuentas[linea["Cuenta"]]
-                            d_val = float(linea["Debe"] or 0.0)
-                            h_val = float(linea["Haber"] or 0.0)
+                            d_dig = float(linea["Debe"] or 0.0)
+                            h_dig = float(linea["Haber"] or 0.0)
+                            d_crc = round(d_dig * factor_conv, 2)
+                            h_crc = round(h_dig * factor_conv, 2)
+                            d_usd = round(d_dig, 2) if es_usd else round(d_crc / factor_conv, 2) if factor_conv > 0 else 0.0
+                            h_usd = round(h_dig, 2) if es_usd else round(h_crc / factor_conv, 2) if factor_conv > 0 else 0.0
+
                             cur.execute(
                                 """
-                                INSERT INTO asientos_detalle (asiento_id, cuenta_id, debe, haber, conciliado)
-                                VALUES (?, ?, ?, ?, 0)
+                                INSERT INTO asientos_detalle (
+                                    asiento_id, cuenta_id, debe, haber, conciliado,
+                                    moneda_origen, monto_usd_debe, monto_usd_haber, tipo_cambio_aplicado
+                                ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
                                 """,
-                                (nuevo_asiento_id, cid, d_val, h_val),
+                                (
+                                    nuevo_asiento_id,
+                                    cid,
+                                    d_crc,
+                                    h_crc,
+                                    moneda_cod,
+                                    d_usd,
+                                    h_usd,
+                                    float(factor_conv),
+                                ),
                             )
 
                         guardar_y_sincronizar(conn)
                         st.session_state.pop("lineas_asiento_df", None)
-                        st.success(f"Asiento #{num_asiento} contabilizado exitosamente.")
+                        st.session_state.pop("tc_valor_actual", None)
+                        st.success(
+                            f"Asiento #{num_asiento} contabilizado en Colones (₡ {tot_d_crc:,.2f})"
+                            + (f" desde USD $ {tot_d_dig:,.2f} (TC ₡ {factor_conv:,.4f})." if es_usd else ".")
+                        )
                         st.rerun()
 
         with tab_cons:
-            st.subheader("Consulta de Asientos Registrados")
+            st.subheader("Consulta de Asientos Registrados (Expresados en Colones ₡)")
             f1, f2 = st.columns(2)
             f_desde = f1.date_input("Desde", value=datetime.date(datetime.date.today().year, 1, 1), key="ld_desde")
             f_hasta = f2.date_input("Hasta", value=datetime.date.today(), key="ld_hasta")
@@ -580,9 +905,11 @@ elif menu == "📝 Asientos Contables":
             df_asientos = pd.read_sql_query(
                 """
                 SELECT ac.id, ac.num_asiento AS "Asiento", ac.fecha AS "Fecha", ac.tipo_asiento AS "Tipo",
+                       COALESCE(ac.moneda_dig, 'CRC') AS "Moneda Dig.",
+                       COALESCE(ac.tipo_cambio_bccr, 1.0) AS "TC BCCR",
                        ac.num_comprobante AS "Comprobante", ac.concepto AS "Concepto",
-                       COALESCE(SUM(ad.debe), 0) AS "Total Debe",
-                       COALESCE(SUM(ad.haber), 0) AS "Total Haber"
+                       COALESCE(SUM(ad.debe), 0) AS "Total Debe (₡)",
+                       COALESCE(SUM(ad.haber), 0) AS "Total Haber (₡)"
                 FROM asientos_cabecera ac
                 LEFT JOIN asientos_detalle ad ON ac.id = ad.asiento_id
                 WHERE ac.empresa_id = ? AND ac.fecha BETWEEN ? AND ?
@@ -610,7 +937,11 @@ elif menu == "📝 Asientos Contables":
                 if asiento_ver:
                     df_det = pd.read_sql_query(
                         """
-                        SELECT c.codigo AS "Código", c.nombre AS "Cuenta", ad.debe AS "Debe", ad.haber AS "Haber"
+                        SELECT c.codigo AS "Código", c.nombre AS "Cuenta",
+                               COALESCE(ad.monto_usd_debe, 0) AS "Debe (USD)",
+                               COALESCE(ad.monto_usd_haber, 0) AS "Haber (USD)",
+                               COALESCE(ad.tipo_cambio_aplicado, 1.0) AS "TC",
+                               ad.debe AS "Debe (₡)", ad.haber AS "Haber (₡)"
                         FROM asientos_detalle ad
                         JOIN catalogo_cuentas c ON ad.cuenta_id = c.id
                         WHERE ad.asiento_id = ?
@@ -634,11 +965,11 @@ elif menu == "📥 Importar desde Excel":
     if not empresa_id:
         st.info("Seleccione una empresa en el panel izquierdo.")
     else:
-        st.subheader("Importación Masiva de Asientos desde Excel")
+        st.subheader("Importación Masiva de Asientos desde Excel (Convertidos a Colones ₡)")
         st.info(
             "El archivo Excel debe contener las columnas: "
             "`num_asiento`, `fecha`, `concepto`, `codigo_cuenta`, `debe`, `haber` "
-            "(opcionales: `tipo_asiento`, `num_comprobante`, `forma_pago`)."
+            "(opcionales: `moneda` con `'CRC'` o `'USD'`, `tipo_cambio`, `tipo_asiento`, `num_comprobante`, `forma_pago`)."
         )
         archivo_excel = st.file_uploader("Subir archivo Excel (.xlsx)", type=["xlsx"], key="up_asientos")
         if archivo_excel and st.button("🚀 Procesar e Importar Asientos", type="primary"):
@@ -664,18 +995,33 @@ elif menu == "📥 Importar desde Excel":
                         for num_a, grupo in df_imp.groupby("num_asiento"):
                             dif_g = round(grupo["debe"].sum() - grupo["haber"].sum(), 2)
                             if abs(dif_g) >= 0.01:
-                                st.error(f"El asiento #{num_a} está descuadrado por ₡ {dif_g:,.2f}. Importación cancelada.")
+                                st.error(f"El asiento #{num_a} está descuadrado por {dif_g:,.2f}. Importación cancelada.")
                                 conn.rollback()
                                 st.stop()
                             prim = grupo.iloc[0]
-                            fecha_str = pd.to_datetime(prim["fecha"]).strftime("%Y-%m-%d")
+                            fecha_dt = pd.to_datetime(prim["fecha"]).date()
+                            fecha_str = fecha_dt.strftime("%Y-%m-%d")
                             periodo_str = fecha_str[:7]
+                            mon_fila = str(prim.get("moneda", "CRC")).strip().upper()
+                            es_fila_usd = mon_fila in {"USD", "DOLARES", "DÓLARES", "$"}
+
+                            if es_fila_usd:
+                                tc_fila = pd.to_numeric(prim.get("tipo_cambio", None), errors="coerce")
+                                if pd.notna(tc_fila) and float(tc_fila) > 0:
+                                    tc_usado = float(tc_fila)
+                                else:
+                                    tc_bccr_val, _ = tc_bccr.obtener_tc_bccr(conn, fecha_dt, tipo_tc="compra")
+                                    tc_usado = float(tc_bccr_val) if tc_bccr_val else 510.0
+                            else:
+                                tc_usado = 1.0
+
                             cur.execute(
                                 """
                                 INSERT INTO asientos_cabecera (
                                     empresa_id, num_asiento, fecha, periodo, concepto, tipo_asiento,
-                                    fecha_registro, forma_pago, num_comprobante, usuario_creacion
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    fecha_registro, forma_pago, num_comprobante, usuario_creacion,
+                                    moneda_dig, tipo_cambio_bccr, modalidad_tc
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
                                 (
                                     empresa_id,
@@ -688,21 +1034,41 @@ elif menu == "📥 Importar desde Excel":
                                     str(prim.get("forma_pago", "Transferencia / SINPE")),
                                     str(prim.get("num_comprobante", "")),
                                     "Importación Excel",
+                                    "USD" if es_fila_usd else "CRC",
+                                    tc_usado,
+                                    "BCCR/Excel" if es_fila_usd else "N/A",
                                 ),
                             )
                             aid = cur.lastrowid
                             for _, r in grupo.iterrows():
+                                d_orig = float(r["debe"])
+                                h_orig = float(r["haber"])
+                                d_crc = round(d_orig * tc_usado, 2)
+                                h_crc = round(h_orig * tc_usado, 2)
+                                d_usd = round(d_orig, 2) if es_fila_usd else 0.0
+                                h_usd = round(h_orig, 2) if es_fila_usd else 0.0
                                 cur.execute(
                                     """
-                                    INSERT INTO asientos_detalle (asiento_id, cuenta_id, debe, haber, conciliado)
-                                    VALUES (?, ?, ?, ?, 0)
+                                    INSERT INTO asientos_detalle (
+                                        asiento_id, cuenta_id, debe, haber, conciliado,
+                                        moneda_origen, monto_usd_debe, monto_usd_haber, tipo_cambio_aplicado
+                                    ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
                                     """,
-                                    (aid, mapa_cod[r["codigo_cuenta"]], float(r["debe"]), float(r["haber"])),
+                                    (
+                                        aid,
+                                        mapa_cod[r["codigo_cuenta"]],
+                                        d_crc,
+                                        h_crc,
+                                        "USD" if es_fila_usd else "CRC",
+                                        d_usd,
+                                        h_usd,
+                                        tc_usado,
+                                    ),
                                 )
                             insertados += 1
 
                         guardar_y_sincronizar(conn)
-                        st.success(f"Se importaron {insertados} asientos contables correctamente.")
+                        st.success(f"Se importaron {insertados} asientos contables convertidos a Colones (₡).")
             except Exception as e:
                 conn.rollback()
                 st.error(f"Error durante la importación: {e}")
@@ -715,7 +1081,7 @@ elif menu == "🏦 Conciliación Bancaria":
     if not empresa_id:
         st.info("Seleccione una empresa en el panel izquierdo.")
     else:
-        st.subheader("Conciliación Bancaria Mensual")
+        st.subheader("Conciliación Bancaria Mensual (en Colones ₡)")
         df_cat = obtener_catalogo(conn, empresa_id)
         df_bancos = df_cat[
             (df_cat["acepta_movimiento"] == 1)
